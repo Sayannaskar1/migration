@@ -1,0 +1,352 @@
+{% extends "base.html" %}
+{% block title %}Snowflake → Databricks Migration Agent{% endblock %}
+{% block page_icon %}{% endblock %}
+{% block page_title %}Dashboard <span class="arrow">/</span> Projects{% endblock %}
+{% set active_page = "home" %}
+
+{% block content %}
+
+{% if projects %}
+<!-- Saved Projects -->
+<div class="card" style="padding:1.25rem 1.5rem">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:1rem;flex-wrap:wrap;gap:.5rem">
+    <div style="display:flex;align-items:center;gap:.5rem">
+      <h3 style="margin-bottom:0;font-size:.9rem">Saved Projects</h3>
+    </div>
+    <span class="badge badge-info" style="font-size:.72rem">{{ projects|length }} saved</span>
+  </div>
+  <div style="display:flex;gap:.5rem;flex-wrap:wrap">
+    {% for p in projects %}
+    <div class="project-chip" style="display:flex;align-items:center;gap:.25rem;background:var(--bg);border:1px solid var(--card-border);border-radius:var(--radius-sm);overflow:hidden;transition:all var(--transition)">
+      <a href="/project/{{ p.id }}" class="project-chip-link" style="display:flex;align-items:center;gap:.5rem;padding:.4rem .75rem;text-decoration:none;color:var(--text);font-size:.78rem;font-weight:500;transition:all var(--transition)">
+        <span>{{ p.name }}</span>
+        {% if p.description %}
+        <span style="font-size:.7rem;color:var(--text-muted);max-width:120px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">— {{ p.description }}</span>
+        {% endif %}
+      </a>
+      <button type="button" class="project-chip-load" style="background:none;border:none;border-left:1px solid var(--card-border);padding:.4rem .6rem;cursor:pointer;color:var(--text-muted);font-size:.7rem;transition:all var(--transition)" title="Load into form"
+        data-project='{{ p | tojson | safe }}'
+        onclick="event.stopPropagation();loadProject(this)">
+        ↻
+      </button>
+    </div>
+    {% endfor %}
+  </div>
+</div>
+{% endif %}
+
+<!-- Upload SQL ZIP -->
+<div class="card">
+  <div style="display:flex;align-items:center;gap:.75rem;margin-bottom:1.5rem">
+    <div style="width:40px;height:40px;border-radius:10px;background:linear-gradient(135deg,#f59e0b,#f97316);display:flex;align-items:center;justify-content:center;font-size:.85rem;font-weight:700;color:#fff;flex-shrink:0">ZIP</div>
+    <div>
+      <h3 style="margin-bottom:0">Upload SQL Files</h3>
+      <p style="font-size:.82rem;color:var(--text-secondary);margin:0">Upload a ZIP file containing Snowflake SQL files</p>
+    </div>
+  </div>
+  <form action="/migrate-file" method="post" enctype="multipart/form-data" style="display:flex;align-items:center;gap:1rem;flex-wrap:wrap">
+    <div style="flex:1;min-width:200px">
+      <input type="file" name="file" accept=".zip" required style="width:100%;padding:.6rem;border:1.5px dashed var(--card-border);border-radius:var(--radius-sm);font-size:.85rem;background:var(--bg);cursor:pointer">
+    </div>
+    <button type="submit" class="btn btn-primary" style="white-space:nowrap">Migrate from ZIP</button>
+  </form>
+  <div style="margin-top:.75rem;font-size:.78rem;color:var(--text-muted);display:flex;gap:1rem;flex-wrap:wrap">
+    <span>Expects <code>.sql</code> files organized by schema folders</span>
+    <span>Runs offline — no Snowflake connection needed</span>
+  </div>
+</div>
+
+<!-- Snowflake Account -->
+<div class="card">
+  <div style="display:flex;align-items:center;gap:.75rem;margin-bottom:1.5rem">
+    <div style="width:40px;height:40px;border-radius:10px;background:linear-gradient(135deg,#1e88e5,#42a5f5);display:flex;align-items:center;justify-content:center;flex-shrink:0">
+      <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="#fff" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+        <line x1="12" y1="2" x2="12" y2="22"/>
+        <line x1="2" y1="12" x2="22" y2="12"/>
+        <line x1="4.93" y1="4.93" x2="19.07" y2="19.07"/>
+        <line x1="19.07" y1="4.93" x2="4.93" y2="19.07"/>
+        <polyline points="9,2 12,5 15,2"/>
+        <polyline points="9,22 12,19 15,22"/>
+        <polyline points="2,9 5,12 2,15"/>
+        <polyline points="22,9 19,12 22,15"/>
+      </svg>
+    </div>
+    <div>
+      <h3 style="margin-bottom:0">Connect to Snowflake</h3>
+      <p style="font-size:.82rem;color:var(--text-secondary);margin:0">Configure your source Snowflake credentials</p>
+    </div>
+  </div>
+
+  <div class="form-row">
+    <div class="form-group">
+      <label>Account Identifier</label>
+      <div class="input-wrap">
+        <input type="text" name="sf_account" id="sf_account" placeholder="xy12345.us-east-1" required autocomplete="off">
+
+      </div>
+    </div>
+    <div class="form-group">
+      <label>Warehouse</label>
+      <div class="input-wrap">
+        <input type="text" name="sf_warehouse" id="sf_warehouse" placeholder="COMPUTE_WH" required>
+
+      </div>
+    </div>
+  </div>
+  <div class="form-row">
+    <div class="form-group">
+      <label>Username</label>
+      <div class="input-wrap">
+        <input type="text" name="sf_user" id="sf_user" required>
+
+      </div>
+    </div>
+    <div class="form-group">
+      <label>Password</label>
+      <div class="input-wrap">
+        <input type="password" name="sf_password" id="sf_password" required>
+
+      </div>
+    </div>
+  </div>
+  <div class="form-row">
+    <div class="form-group">
+      <label>Role <span style="font-weight:400;text-transform:none;color:var(--text-muted)">(optional)</span></label>
+      <div class="input-wrap">
+        <input type="text" name="sf_role" id="sf_role" placeholder="SYSADMIN">
+
+      </div>
+    </div>
+    <div class="form-group">
+      <label>Database <span style="font-weight:400;text-transform:none;color:var(--text-muted)">(optional)</span></label>
+      <div class="input-wrap">
+        <input type="text" name="sf_database" id="sf_database" placeholder="All databases if empty">
+
+      </div>
+    </div>
+  </div>
+  <div class="form-row">
+    <div class="form-group">
+      <label>Schema <span style="font-weight:400;text-transform:none;color:var(--text-muted)">(optional)</span></label>
+      <div class="input-wrap">
+        <input type="text" name="sf_schema" id="sf_schema" placeholder="PUBLIC">
+
+      </div>
+    </div>
+    <div class="form-group"></div>
+  </div>
+
+  <div style="margin-top:1rem;padding:1rem;background:var(--bg);border-radius:var(--radius-sm);display:flex;align-items:center;gap:.75rem">
+    <div style="width:36px;height:36px;border-radius:8px;background:var(--accent-light);display:flex;align-items:center;justify-content:center;flex-shrink:0;font-size:.75rem;font-weight:700;color:var(--accent)">DB</div>
+    <label style="flex:1;cursor:pointer">
+      <div style="display:flex;align-items:center;gap:.5rem;font-weight:600;font-size:.85rem">
+        <input type="checkbox" id="deployCheck" onchange="document.getElementById('dbSection').classList.toggle('hidden')" style="width:auto">
+        Add Databricks connection details
+      </div>
+      <div style="font-size:.78rem;color:var(--text-muted);margin-top:.2rem;margin-left:1.7rem">
+        Optional — configure for deployment after migration
+      </div>
+    </label>
+  </div>
+
+  <div id="dbSection" class="hidden" style="margin-top:1.25rem;padding:1.25rem;background:var(--info-light);border-radius:var(--radius-sm);border:1px solid #bfdbfe">
+    <div style="display:flex;align-items:center;gap:.6rem;margin-bottom:1.25rem">
+      <svg viewBox="0 0 18 18" width="22" height="22" style="flex-shrink:0"><path d="M1.155,4.93v.512L9,9.868l7.006-3.957,0,1.6L9,11.491,1.55,7.258l-.395.22V10.54L9,14.955l7.006-3.942,0,1.586L9,16.581,1.55,12.347l-.395.22v.519L9,17.5l7.845-4.414V10.021l-.4-.218L9,14.036,1.992,10.054V8.476L9,12.414,16.845,8V4.978l-.4-.219L9,8.993,2.352,5.215,9,1.46l5.476,3.094.479-.269V3.863L9,.5Z" fill="#ff3621"/></svg>
+      <span style="font-weight:600;font-size:.9rem">Databricks Connection Details</span>
+    </div>
+    <div class="form-row">
+      <div class="form-group">
+        <label>Server Hostname</label>
+        <div class="input-wrap">
+          <input type="text" name="db_hostname" id="db_hostname" placeholder="dbc-12345.cloud.databricks.com" onchange="cleanHostname(this)">
+  
+        </div>
+      </div>
+      <div class="form-group">
+        <label>HTTP Path</label>
+        <div class="input-wrap">
+          <input type="text" name="db_http_path" id="db_http_path" placeholder="/sql/1.0/warehouses/...">
+  
+        </div>
+      </div>
+    </div>
+    <div class="form-row">
+      <div class="form-group">
+        <label>Access Token</label>
+        <div class="input-wrap">
+          <input type="password" name="db_token" id="db_token">
+  
+        </div>
+      </div>
+    </div>
+    <button type="button" class="btn btn-outline btn-sm" onclick="testDatabricks()" style="margin-top:.5rem" id="dbTestBtn">Test Connection</button>
+    <span id="dbTestResult" style="font-size:.8rem;margin-left:.75rem"></span>
+    <div class="form-row">
+      <div class="form-group">
+        <label>Catalog <span style="font-weight:400;text-transform:none;color:var(--text-muted)">(optional)</span></label>
+        <div class="input-wrap">
+          <input type="text" name="db_catalog" id="db_catalog" placeholder="main">
+  
+        </div>
+      </div>
+      <div class="form-group">
+        <label>Schema <span style="font-weight:400;text-transform:none;color:var(--text-muted)">(optional)</span></label>
+        <div class="input-wrap">
+          <input type="text" name="db_schema" id="db_schema" placeholder="default">
+  
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div style="display:flex;justify-content:center;margin-top:1.5rem">
+    <button type="button" class="btn btn-primary btn-lg" id="saveBtn" onclick="saveProject()" style="min-width:200px">
+      Save Project
+    </button>
+  </div>
+</div>
+
+<script>
+  // Strip path from hostname if user pastes a full URL
+  function cleanHostname(el){
+    let v=el.value.trim();
+    v=v.replace(/^https?:\/\//,'');
+    const idx=v.indexOf('/');
+    if(idx>0)v=v.substring(0,idx);
+    const q=v.indexOf('?');
+    if(q>0)v=v.substring(0,q);
+    el.value=v;
+  }
+
+  // Load a saved project into the form
+  function loadProject(btn){
+    try{
+      const p = JSON.parse(btn.dataset.project);
+      setField('sf_account', p.sf_account);
+      setField('sf_warehouse', p.sf_warehouse);
+      setField('sf_user', p.sf_user);
+      setField('sf_role', p.sf_role);
+      setField('sf_database', p.sf_database);
+      setField('sf_schema', p.sf_schema);
+      if(p.db_hostname){
+        setField('db_hostname', p.db_hostname);
+        setField('db_http_path', p.db_http_path);
+        setField('db_catalog', p.db_catalog);
+        setField('db_schema', p.db_schema);
+        const chk=document.getElementById('deployCheck');
+        if(chk&&!chk.checked){chk.checked=true;chk.onchange();}
+      }
+      fetch('/api/projects/'+p.id+'/credentials')
+        .then(r=>r.json()).then(c=>{
+          setField('sf_password', c.sf_password);
+          setField('db_token', c.db_token);
+        });
+      showToast('Project "'+p.name+'" loaded','success');
+    }catch(e){showToast('Failed to load project','error')}
+  }
+  function setField(id,val){
+    const el=document.getElementById(id);
+    if(el){el.value=val||'';if(val)el.classList.add('filled')}
+  }
+
+  // Save current form as a project
+  function saveProject(){
+    const modal = document.getElementById('saveModal');
+    modal.classList.add('open');
+    document.getElementById('saveModalName').value = '';
+    document.getElementById('saveModalDesc').value = '';
+    document.getElementById('saveModalName').focus();
+  }
+
+  function doSaveProject(){
+    const name = document.getElementById('saveModalName').value.trim();
+    if(!name){ showToast('Enter a project name','error'); return; }
+    const desc = document.getElementById('saveModalDesc').value.trim();
+    closeSaveModal();
+    const fd=new FormData();
+    fd.set('name',name);
+    fd.set('description',desc);
+    ['sf_account','sf_user','sf_password','sf_warehouse','sf_role','sf_database','sf_schema',
+     'db_hostname','db_http_path','db_token','db_catalog','db_schema'].forEach(id=>{
+      const el=document.getElementById(id);
+      if(el)fd.set(id,el.value);
+    });
+    const btn=document.getElementById('saveBtn');
+    btn.disabled=true;btn.textContent='Saving...';
+    fetch('/api/projects/save',{method:'POST',body:fd})
+      .then(r=>r.json()).then(d=>{
+        if(d.ok){showToast('Project "'+name+'" saved!','success');setTimeout(()=>location.reload(),1200)}
+        else showToast('Save failed','error');
+      }).catch(()=>showToast('Save failed','error'))
+      .finally(()=>{btn.disabled=false;btn.textContent='Save Project'});
+  }
+
+  function closeSaveModal(){
+    document.getElementById('saveModal').classList.remove('open');
+  }
+
+  // Test Databricks connection
+  function testDatabricks(){
+    const host=document.getElementById('db_hostname').value.trim();
+    const path=document.getElementById('db_http_path').value.trim();
+    const token=document.getElementById('db_token').value.trim();
+    if(!host||!path||!token){showToast('Fill in Server Hostname, HTTP Path, and Access Token','error');return}
+    const btn=document.getElementById('dbTestBtn');
+    const res=document.getElementById('dbTestResult');
+    btn.disabled=true;btn.textContent='Testing...';res.textContent='';res.style.color='var(--text-muted)';
+    const fd=new FormData();
+    fd.set('db_hostname',host);fd.set('db_http_path',path);fd.set('db_token',token);
+    fetch('/api/test-databricks',{method:'POST',body:fd})
+      .then(r=>r.json()).then(d=>{
+        if(d.ok){res.textContent=d.message;res.style.color='var(--success)'}
+        else{res.textContent=d.error;res.style.color='var(--error)'}
+      }).catch(e=>{res.textContent='Request failed';res.style.color='var(--error)'})
+      .finally(()=>{btn.disabled=false;btn.textContent='Test Connection'});
+  }
+</script>
+
+<!-- Save Project Modal -->
+<div class="modal-overlay" id="saveModal" onclick="if(event.target===this)closeSaveModal()" onkeydown="if(event.key==='Escape')closeSaveModal()">
+  <div class="modal">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:1.25rem">
+      <h3 style="margin-bottom:0;font-size:1rem">Save Project</h3>
+      <button class="modal-close" onclick="closeSaveModal()">✕</button>
+    </div>
+    <div class="form-group">
+      <label>Project Name</label>
+      <input type="text" id="saveModalName" class="form-input" placeholder="e.g. Prod Migration" required>
+    </div>
+    <div class="form-group">
+      <label>Description <span style="font-weight:400;text-transform:none;color:var(--text-muted)">(optional)</span></label>
+      <textarea id="saveModalDesc" class="form-input" rows="3" placeholder="What is this project for?" style="resize:vertical"></textarea>
+    </div>
+    <div style="display:flex;gap:.75rem;margin-top:1.5rem;justify-content:flex-end">
+      <button class="btn btn-ghost" onclick="closeSaveModal()">Cancel</button>
+      <button class="btn btn-primary" onclick="doSaveProject()">Save Project</button>
+    </div>
+  </div>
+</div>
+
+<style>
+  .modal-overlay {
+    display:none;position:fixed;inset:0;background:rgba(0,0,0,.4);z-index:1000;
+    align-items:center;justify-content:center;
+    -webkit-backdrop-filter:blur(4px);backdrop-filter:blur(4px);
+    padding:1rem;
+  }
+  .modal-overlay.open{display:flex}
+  .modal {
+    background:var(--card);border-radius:var(--radius-lg);
+    padding:1.75rem;max-width:480px;width:100%;
+    box-shadow:0 25px 50px -12px rgba(0,0,0,.25);
+    animation:modalIn .2s ease;
+  }
+  @keyframes modalIn{from{opacity:0;transform:scale(.96) translateY(8px)}to{opacity:1;transform:scale(1) translateY(0)}}
+  .modal-close{background:none;border:none;font-size:1.1rem;cursor:pointer;color:var(--text-muted);padding:.25rem}
+  .modal-close:hover{color:var(--text)}
+  .modal .form-input{width:100%;padding:.6rem .85rem;border:1.5px solid var(--card-border);border-radius:var(--radius-sm);font-size:.85rem;font-family:var(--font);background:#fafbfc;transition:all var(--transition);color:var(--text)}
+  .modal .form-input:focus{outline:none;border-color:var(--accent);background:#fff;box-shadow:0 0 0 3px var(--accent-glow)}
+  .modal .form-group{margin-bottom:.9rem}
+  .modal .form-group label{display:block;font-size:.72rem;font-weight:600;color:var(--text-secondary);margin-bottom:.35rem;text-transform:uppercase;letter-spacing:.04em}
+</style>
+{% endblock %}

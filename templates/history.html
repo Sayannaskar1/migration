@@ -1,0 +1,75 @@
+{% extends "base.html" %}
+{% block title %}Migration History{% endblock %}
+{% block page_icon %}{% endblock %}
+{% block page_title %}Migration <span class="arrow">/</span> History{% endblock %}
+{% set active_page = "history" %}
+
+{% block content %}
+{% if not runs or runs|length == 0 %}
+<div class="empty-state" style="padding:4rem 2rem">
+  <h3 style="margin-bottom:.5rem;font-weight:600">No migrations yet</h3>
+  <p style="color:var(--text-secondary);font-size:.9rem;max-width:360px;margin:0 auto">
+    Run a migration from the dashboard — your history will appear here.
+  </p>
+  <a href="/" class="btn btn-primary mt-2">← Go to Dashboard</a>
+</div>
+{% else %}
+<div style="display:grid;gap:.75rem">
+  {% for run in runs %}
+  <div class="card" style="padding:1.25rem 1.5rem;display:flex;align-items:center;gap:1rem;flex-wrap:wrap">
+    <div style="flex:1;min-width:200px">
+      <div style="display:flex;align-items:center;gap:.5rem;flex-wrap:wrap">
+        <span style="font-family:var(--mono);font-size:.82rem;font-weight:600">{{ run.run_id[:12] }}</span>
+        {% if run.done and not run.error %}
+        <span class="badge badge-success">Done</span>
+        {% elif run.error %}
+        <span class="badge badge-error">Failed</span>
+        {% else %}
+        <span class="badge badge-warning">In Progress</span>
+        {% endif %}
+      </div>
+      <div style="font-size:.78rem;color:var(--text-muted);margin-top:.25rem">
+        {{ run.timestamp }}
+        {% if run.sf_account %} · {{ run.sf_account }}{% endif %}
+      </div>
+    </div>
+
+    {% if run.summary %}
+    <div style="display:flex;gap:1rem;font-size:.8rem;color:var(--text-secondary)">
+      <span><strong style="color:var(--text)">{{ run.summary.objects or 0 }}</strong> objects</span>
+      <span><strong style="color:var(--success)">{{ run.summary.success or 0 }}</strong> ok</span>
+      <span><strong style="color:var(--error)">{{ run.summary.failed or 0 }}</strong> failed</span>
+      <span><strong>{{ run.summary.pass_rate or 0 }}%</strong> pass</span>
+    </div>
+    {% endif %}
+
+    {% if run.data_migration_results %}
+    <div style="display:flex;gap:1rem;font-size:.8rem;color:var(--text-secondary)">
+      {% set dm_total = run.data_migration_results|length %}
+      {% set dm_ok = run.data_migration_results|selectattr('success')|list|length %}
+      <span>📊 <strong style="color:var(--text)">{{ dm_total }}</strong> tables migrated</span>
+      <span><strong style="color:var(--success)">{{ dm_ok }}</strong> ok</span>
+      {% if dm_total - dm_ok > 0 %}
+      <span><strong style="color:var(--error)">{{ dm_total - dm_ok }}</strong> failed</span>
+      {% endif %}
+    </div>
+    {% endif %}
+
+      <div style="display:flex;gap:.5rem;margin-left:auto;flex-shrink:0">
+      {% if not run.done and not run.error %}
+      <a href="/progress/{{ run.run_id }}" class="btn btn-outline btn-sm">View Progress</a>
+      {% else %}
+      <a href="/results/{{ run.run_id }}" class="btn btn-outline btn-sm">View Results</a>
+      {% endif %}
+      {% if run.done and not run.error %}
+      <a href="/api/runs/{{ run.run_id }}/report" class="btn btn-ghost btn-sm" download>Report</a>
+      {% endif %}
+      {% if run.deploy_allowed and run.done and not run.error %}
+      <a href="/results/{{ run.run_id }}" class="btn btn-success btn-sm">Deploy</a>
+      {% endif %}
+    </div>
+  </div>
+  {% endfor %}
+</div>
+{% endif %}
+{% endblock %}

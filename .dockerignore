@@ -1,0 +1,17 @@
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+.git/
+.gitignore
+.env
+.key
+queue.db
+output/
+output_*/
+.pytest_cache/
+tests/
+docs/
+*.md
+.DS_Store

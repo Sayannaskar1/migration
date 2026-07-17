@@ -1,0 +1,10 @@
+.env
+.key
+__pycache__/
+*.pyc
+.pytest_cache/
+queue.db
+*.db
+*.db-shm
+*.db-wal
+output/

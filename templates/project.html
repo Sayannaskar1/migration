@@ -1,0 +1,273 @@
+{% extends "base.html" %}
+{% block title %}{{ project.name if project else 'Project Not Found' }}{% endblock %}
+{% block page_icon %}{% endblock %}
+{% block page_title %}{{ project.name if project else 'Project' }} <span class="arrow">/</span> Details{% endblock %}
+{% set active_page = "home" %}
+
+{% block content %}
+
+{% if not project %}
+<div class="card" style="text-align:center;padding:4rem 2rem">
+  <h3 style="margin-bottom:.5rem">Project Not Found</h3>
+  <p style="color:var(--text-secondary);margin-bottom:1.5rem">This project may have been deleted.</p>
+  <a href="/" class="btn btn-primary">← Back to Dashboard</a>
+</div>
+{% else %}
+
+<!-- Header -->
+<div class="card" style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:1rem">
+  <div style="display:flex;align-items:center;gap:1rem">
+    <div style="width:48px;height:48px;border-radius:12px;background:linear-gradient(135deg,var(--accent),#6366f1);display:flex;align-items:center;justify-content:center;font-size:1.1rem;font-weight:700;color:#fff">{{ project.name[:1] | upper }}</div>
+    <div>
+      <h3 style="margin-bottom:.15rem;font-size:1.1rem">{{ project.name }}</h3>
+      <p id="headerDescription" style="font-size:.82rem;color:var(--text-secondary);margin:0">{{ project.description or 'No description' }}</p>
+    </div>
+  </div>
+  <div style="display:flex;gap:.5rem;flex-wrap:wrap">
+    <button class="btn btn-primary" onclick="runMigration(this)">Run Migration</button>
+    <label style="display:flex;align-items:center;gap:.35rem;font-size:.82rem;color:var(--text-secondary);cursor:pointer;white-space:nowrap">
+      <input type="checkbox" id="refreshCheck"> Re-extract DDL from Snowflake
+    </label>
+    <a href="/" class="btn btn-ghost">← Dashboard</a>
+  </div>
+</div>
+
+<!-- Main content: side-by-side -->
+<div style="display:grid;grid-template-columns:1fr 1fr;gap:1.25rem;margin-top:.25rem" class="project-grid">
+
+  <!-- Left column: Connection details -->
+  <div>
+    <!-- Description -->
+    <div class="card">
+      <h3>Description</h3>
+      <textarea id="projectDescription" rows="3" style="width:100%;padding:.65rem .9rem;border:1.5px solid var(--card-border);border-radius:var(--radius-sm);font-size:.85rem;font-family:var(--font);background:#fafbfc;transition:all var(--transition);resize:vertical;color:var(--text)" placeholder="What is this project for?">{{ project.description or '' }}</textarea>
+    </div>
+
+    <!-- Snowflake Connection -->
+    <div class="card">
+      <h3>Snowflake Connection</h3>
+      <div class="form-group">
+        <label>Account Identifier</label>
+        <input type="text" id="sf_account" value="{{ project.sf_account or '' }}" class="form-input">
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label>Username</label>
+          <input type="text" id="sf_user" value="{{ project.sf_user or '' }}" class="form-input">
+        </div>
+        <div class="form-group">
+          <label>Password</label>
+          <input type="password" id="sf_password" value="{{ project.sf_password or '' }}" class="form-input">
+        </div>
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label>Warehouse</label>
+          <input type="text" id="sf_warehouse" value="{{ project.sf_warehouse or '' }}" class="form-input">
+        </div>
+        <div class="form-group">
+          <label>Role</label>
+          <input type="text" id="sf_role" value="{{ project.sf_role or '' }}" class="form-input" placeholder="SYSADMIN">
+        </div>
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label>Database</label>
+          <input type="text" id="sf_database" value="{{ project.sf_database or '' }}" class="form-input" placeholder="All databases if empty">
+        </div>
+        <div class="form-group">
+          <label>Schema</label>
+          <input type="text" id="sf_schema" value="{{ project.sf_schema or '' }}" class="form-input" placeholder="PUBLIC">
+        </div>
+      </div>
+    </div>
+
+    <!-- Databricks Connection -->
+    <div class="card">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:1rem">
+        <h3 style="margin-bottom:0">Databricks Connection</h3>
+        <label style="display:flex;align-items:center;gap:.4rem;font-size:.82rem;color:var(--text-secondary);cursor:pointer">
+          <input type="checkbox" id="dbToggle" onchange="toggleDb()" {% if project.db_hostname %}checked{% endif %}>
+          Enable
+        </label>
+      </div>
+      <div id="dbFields" class="{% if not project.db_hostname %}hidden{% endif %}">
+        <div class="form-group">
+          <label>Server Hostname</label>
+          <input type="text" id="db_hostname" value="{{ project.db_hostname or '' }}" class="form-input" placeholder="dbc-12345.cloud.databricks.com">
+        </div>
+        <div class="form-group">
+          <label>HTTP Path</label>
+          <input type="text" id="db_http_path" value="{{ project.db_http_path or '' }}" class="form-input" placeholder="/sql/1.0/warehouses/...">
+        </div>
+        <div class="form-group">
+          <label>Access Token</label>
+          <input type="password" id="db_token" value="{{ project.db_token or '' }}" class="form-input">
+        </div>
+        <div class="form-row">
+          <div class="form-group">
+            <label>Catalog</label>
+            <input type="text" id="db_catalog" value="{{ project.db_catalog or '' }}" class="form-input" placeholder="main">
+          </div>
+          <div class="form-group">
+            <label>Schema</label>
+            <input type="text" id="db_schema" value="{{ project.db_schema or '' }}" class="form-input" placeholder="default">
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Save / Delete actions -->
+    <div class="card" style="display:flex;gap:.75rem;flex-wrap:wrap">
+      <button class="btn btn-primary" onclick="saveProject(this)">Save Changes</button>
+      <button class="btn btn-ghost" onclick="deleteProject()" style="color:var(--error)">Delete Project</button>
+    </div>
+  </div>
+
+  <!-- Right column: Run history -->
+  <div>
+    <div class="card">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:1rem">
+        <h3 style="margin-bottom:0">Run History</h3>
+        <span class="badge badge-neutral">{{ runs|length }} runs</span>
+      </div>
+      {% if runs %}
+      <div style="display:flex;flex-direction:column;gap:.5rem">
+        {% for r in runs %}
+        <a href="/results/{{ r.run_id }}" class="card" style="display:flex;align-items:center;gap:.75rem;padding:.75rem 1rem;margin-bottom:0;text-decoration:none;color:inherit">
+          <div style="font-size:1.2rem">
+            {% if r.done and not r.error %}{% elif r.error %}{% else %}{% endif %}
+          </div>
+          <div style="flex:1;min-width:0">
+            <div style="font-size:.85rem;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">
+              {% if r.summary and r.summary.unique_objects is defined %}
+                {{ r.summary.unique_objects }} objects converted
+              {% elif r.summary and r.summary.total_objects is defined %}
+                {{ r.summary.total_objects }} objects converted
+              {% else %}
+                Migration run
+              {% endif %}
+            </div>
+            <div style="font-size:.72rem;color:var(--text-muted)">{{ r.timestamp }}</div>
+          </div>
+          <span class="badge {% if r.done and not r.error %}badge-success{% elif r.error %}badge-error{% else %}badge-warning{% endif %}">
+            {% if r.done and not r.error %}Success{% elif r.error %}Failed{% else %}In Progress{% endif %}
+          </span>
+        </a>
+        {% endfor %}
+      </div>
+      {% else %}
+      <div class="empty-state" style="padding:2rem 1rem">
+        <p>No runs yet. Click "Run Migration" to start.</p>
+      </div>
+      {% endif %}
+    </div>
+  </div>
+
+</div>
+
+<script>
+  const projectId = '{{ project.id }}';
+  let cancelRequested = false;
+
+  function getVal(id) {
+    const el = document.getElementById(id);
+    return el ? el.value : '';
+  }
+
+  function toggleDb() {
+    const show = document.getElementById('dbToggle').checked;
+    document.getElementById('dbFields').classList.toggle('hidden', !show);
+  }
+
+  function collectForm() {
+    const fd = new URLSearchParams();
+    fd.set('project_id', projectId);
+    fd.set('name', {{ project.name | tojson }});
+    fd.set('description', getVal('projectDescription'));
+    fd.set('sf_account', getVal('sf_account'));
+    fd.set('sf_user', getVal('sf_user'));
+    fd.set('sf_password', getVal('sf_password'));
+    fd.set('sf_warehouse', getVal('sf_warehouse'));
+    fd.set('sf_role', getVal('sf_role'));
+    fd.set('sf_database', getVal('sf_database'));
+    fd.set('sf_schema', getVal('sf_schema'));
+    if (document.getElementById('dbToggle').checked) {
+      fd.set('db_hostname', getVal('db_hostname'));
+      fd.set('db_http_path', getVal('db_http_path'));
+      fd.set('db_token', getVal('db_token'));
+      fd.set('db_catalog', getVal('db_catalog'));
+      fd.set('db_schema', getVal('db_schema'));
+    }
+    return fd;
+  }
+
+  function saveProject(btn) {
+    btn.disabled = true;
+    btn.textContent = 'Saving...';
+    fetch('/api/projects/update', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+      body: collectForm()
+    }).then(r => r.json()).then(d => {
+      if (d.ok) {
+        showToast('Project saved!', 'success');
+        document.getElementById('headerDescription').textContent = getVal('projectDescription') || 'No description';
+      } else {
+        showToast('Save failed: ' + (d.error || 'unknown'), 'error');
+      }
+    }).catch(() => showToast('Save failed', 'error'))
+    .finally(() => { btn.disabled = false; btn.textContent = 'Save Changes'; });
+  }
+
+  function deleteProject() {
+    if (!confirm('Delete project "{{ project.name }}"? This cannot be undone.')) return;
+    fetch('/api/projects/' + projectId, {method: 'DELETE'})
+      .then(r => r.json()).then(d => {
+        if (d.ok) { showToast('Project deleted', 'info'); setTimeout(() => window.location.href = '/', 1000); }
+        else showToast('Delete failed', 'error');
+      }).catch(() => showToast('Delete failed', 'error'));
+  }
+
+  function runMigration(btn) {
+    if (cancelRequested) return;
+    btn.disabled = true;
+    btn.textContent = 'Starting...';
+    const params = new URLSearchParams({project_id: projectId});
+    if (document.getElementById('refreshCheck').checked) {
+      params.set('refresh', 'true');
+    }
+    fetch('/api/projects/start-migration', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+      body: params
+    }).then(r => r.json()).then(d => {
+      if (d.run_id) {
+        window.location.href = '/progress/' + d.run_id;
+      } else {
+        showToast('Failed: ' + (d.error || 'unknown'), 'error');
+        btn.disabled = false;
+        btn.textContent = 'Run Migration';
+      }
+    }).catch(() => {
+      showToast('Failed to start migration', 'error');
+      btn.disabled = false;
+      btn.textContent = 'Run Migration';
+    });
+  }
+</script>
+
+<style>
+  @media(max-width:900px){
+    .project-grid{grid-template-columns:1fr!important}
+  }
+  .form-group { margin-bottom: .9rem; }
+  .form-group label { display: block; font-size: .72rem; font-weight: 600; color: var(--text-secondary); margin-bottom: .3rem; text-transform: uppercase; letter-spacing: .04em; }
+  .form-input { width: 100%; padding: .55rem .8rem; border: 1.5px solid var(--card-border); border-radius: var(--radius-sm); font-size: .85rem; font-family: var(--font); background: #fafbfc; transition: all var(--transition); color: var(--text); }
+  .form-input:focus { outline: none; border-color: var(--accent); background: #fff; box-shadow: 0 0 0 3px var(--accent-glow); }
+  .form-row { display: flex; gap: .75rem; }
+  .form-row > * { flex: 1; }
+</style>
+
+{% endif %}
+{% endblock %}

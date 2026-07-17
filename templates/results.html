@@ -1,0 +1,746 @@
+{% extends "base.html" %}
+{% block title %}Migration Results — Snowflake → Databricks{% endblock %}
+{% block page_icon %}{% endblock %}
+{% block page_title %}Migration Results{% endblock %}
+{% set active_page = "results" %}
+
+{% block content %}
+{% if error %}
+<div class="card" id="errorBanner" style="border-color:transparent;background:{% if is_deploy_error %}var(--warning-light){% else %}var(--error-light){% endif %}">
+  <div style="display:flex;align-items:flex-start;gap:.75rem">
+    <div style="width:40px;height:40px;border-radius:10px;background:{% if is_deploy_error %}var(--warning){% else %}var(--error){% endif %};display:flex;align-items:center;justify-content:center;font-size:1.2rem;flex-shrink:0;color:#fff">{{ '✕' }}</div>
+    <div style="flex:1">
+      <h3 style="color:{% if is_deploy_error %}var(--warning){% else %}var(--error){% endif %};margin-bottom:.25rem">{% if is_deploy_error %}Deployment Failed{% else %}Migration Failed{% endif %}</h3>
+      <pre style="background:transparent;color:{% if is_deploy_error %}var(--warning){% else %}var(--error){% endif %};padding:.5rem 0;font-family:var(--mono);font-size:.8rem;overflow-x:auto;white-space:pre-wrap">{{ error }}</pre>
+      <div style="display:flex;gap:.5rem;flex-wrap:wrap;margin-top:.5rem">
+        <a href="/" class="btn btn-outline btn-sm">← Dashboard</a>
+        {% if run_id and conversions and conversions|length > 0 %}
+        <form action="/retry/{{ run_id }}" method="post" style="display:inline">
+          <button type="submit" class="btn btn-outline btn-sm">Retry Conversion (keep DDL)</button>
+        </form>
+        {% endif %}
+      </div>
+    </div>
+    <button onclick="document.getElementById('errorBanner').remove()" style="background:none;border:none;color:var(--text-muted);cursor:pointer;font-size:1.2rem;padding:.25rem;line-height:1">&times;</button>
+  </div>
+</div>
+{% endif %}
+
+<div class="steps">
+  <div class="step done"><span class="step-circle">✓</span><span class="step-label">Connect</span></div>
+  <div class="step-connector done"></div>
+  <div class="step done"><span class="step-circle">✓</span><span class="step-label">Convert</span></div>
+  <div class="step-connector done"></div>
+  <div class="step {% if deploy_results %}done{% elif deploy_allowed %}active{% else %}active{% endif %}"><span class="step-circle">{% if deploy_results %}✓{% else %}3{% endif %}</span><span class="step-label">Review</span></div>
+  <div class="step-connector {% if deploy_results %}done{% endif %}"></div>
+  <div class="step {% if deploy_results %}done{% elif deploy_allowed %}active{% endif %}"><span class="step-circle">{% if deploy_results %}✓{% else %}4{% endif %}</span><span class="step-label">Deploy</span></div>
+</div>
+
+{% if summary %}
+<div class="stats">
+  <div class="stat">
+    <div class="stat-bar"></div>
+    <div class="stat-value" style="color:var(--info)">{{ summary.objects }}</div>
+    <div class="stat-label">Total Objects</div>
+  </div>
+  <div class="stat">
+    <div class="stat-bar" style="background:linear-gradient(90deg,var(--success),#10b981)"></div>
+    <div class="stat-value" style="color:var(--success)">{{ summary.success }}</div>
+    <div class="stat-label">Converted</div>
+  </div>
+  <div class="stat">
+    <div class="stat-bar" style="background:linear-gradient(90deg,var(--error),#f87171)"></div>
+    <div class="stat-value" style="color:var(--error)">{{ summary.failed }}</div>
+    <div class="stat-label">Failed</div>
+  </div>
+  <div class="stat">
+    <div class="stat-bar" style="background:linear-gradient(90deg,var(--warning),#f59e0b)"></div>
+    <div class="stat-value" style="color:{% if summary.pass_rate >= 80 %}var(--success){% elif summary.pass_rate >= 50 %}var(--warning){% else %}var(--error){% endif %}">{{ summary.pass_rate }}%</div>
+    <div class="stat-label">Pass Rate</div>
+  </div>
+</div>
+
+{% if conversions %}
+<div class="card" style="padding:0;overflow:hidden">
+  <div style="padding:1.25rem 1.5rem 0">
+    <h3 style="margin-bottom:.75rem">Object Inventory</h3>
+  </div>
+  <div id="inventoryList">
+    {% for conv in conversions %}
+    <details class="file-item" style="border-left:none;border-right:none;border-radius:0;margin-bottom:0;border-top:none">
+      <summary>
+        <span>
+          <span class="truncate">{{ conv.name }}</span>
+        </span>
+        <span>
+          <span class="badge badge-neutral">{{ conv.object_type }}</span>
+          <span class="chevron">▸</span>
+        </span>
+      </summary>
+      <div class="file-meta">
+        {% if conv.source_path %}<span>Source: {{ conv.source_path }}</span>{% endif %}
+      </div>
+      {% if conv.raw_sql %}
+      <div class="code-block">
+        <div class="code-header">
+          <span class="lang">Snowflake (Original)</span>
+          <button class="copy-btn" type="button">Copy</button>
+        </div>
+        <pre><code>{{ conv.raw_sql }}</code></pre>
+      </div>
+      {% endif %}
+      {% if conv.converted_sql %}
+      <div class="code-block" style="margin-top:0">
+        <div class="code-header">
+          <span class="lang">Databricks (Converted)</span>
+          <button class="copy-btn" type="button">Copy</button>
+        </div>
+        <pre><code>{{ conv.converted_sql }}</code></pre>
+      </div>
+      {% endif %}
+    </details>
+    {% endfor %}
+  </div>
+</div>
+{% endif %}
+{% endif %}
+
+{% if conversions %}
+<div class="card" style="padding:0;overflow:hidden">
+  <div style="padding:1.25rem 1.5rem 0;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:.75rem">
+    <h3 style="margin-bottom:0">Converted SQL</h3>
+  </div>
+
+  <div class="tabs" style="padding:0 1rem;margin-bottom:0" role="tablist">
+    <button class="tab active" data-tab="tab-files" role="tab" aria-selected="true" aria-controls="tab-files">Files</button>
+    <button class="tab" data-tab="tab-review" role="tab" aria-selected="false" aria-controls="tab-review">Review</button>
+    <button class="tab" data-tab="tab-report" role="tab" aria-selected="false" aria-controls="tab-report">Migration Report</button>
+    {% if storage_report %}
+    <button class="tab" data-tab="tab-data" role="tab" aria-selected="false" aria-controls="tab-data">Data</button>
+    {% endif %}
+    {% if deploy_allowed %}
+    <button class="tab" data-tab="tab-deploy" role="tab" aria-selected="false" aria-controls="tab-deploy">Deploy</button>
+    {% endif %}
+  </div>
+
+  <!-- Files Tab -->
+  <div class="tab-content active" id="tab-files" role="tabpanel" aria-labelledby="tab-files" style="padding:1.25rem 1.5rem 1.5rem">
+    <div class="filter-bar">
+      <div class="search-wrap">
+        <input type="text" id="fileSearch" placeholder="Search files..." oninput="filterFiles(this.value)">
+      </div>
+      <span class="badge badge-info" id="fileCount">{{ conversions|length }} files</span>
+    </div>
+
+    <div id="fileList">
+      {% for conv in conversions %}
+      <details class="file-item" data-name="{{ conv.name|lower }}">
+        <summary>
+          <span style="display:flex;align-items:center;gap:.5rem;overflow:hidden">
+            <span class="truncate">{{ conv.name }}</span>
+          </span>
+          <span style="display:flex;align-items:center;gap:.5rem;flex-shrink:0">
+            {% if conv.status == "converted" %}<span class="badge badge-success">{{ conv.object_type }}</span>{% endif %}
+            {% if conv.review_status == 'approved' %}<span class="badge badge-success">✓</span>
+            {% elif conv.review_status == 'rejected' %}<span class="badge badge-error">✕</span>
+            {% else %}<span class="badge badge-warning">?</span>{% endif %}
+            <span class="chevron">▸</span>
+          </span>
+        </summary>
+        {% if conv.converted_sql %}
+        <div class="file-meta">
+          {% if conv.source_path %}<span>Source: {{ conv.source_path }}</span>{% endif %}
+        </div>
+        <div class="code-block" style="border-radius:0;margin-top:0">
+          <div class="code-header">
+            <span class="lang">SQL</span>
+            <button class="copy-btn" type="button">Copy</button>
+          </div>
+          <pre><code>{{ conv.converted_sql }}</code></pre>
+        </div>
+        {% if conv.issues %}
+        <div class="file-issues">{{ conv.issues }}</div>
+        {% endif %}
+        {% elif conv.error %}
+        <div class="file-error">Error: {{ conv.error }}</div>
+        {% else %}
+        <div class="file-error">No converted SQL produced</div>
+        {% endif %}
+      </details>
+      {% endfor %}
+    </div>
+    <div class="empty-state" id="noResults" style="display:none">
+      <p>No files match your search</p>
+    </div>
+  </div>
+
+  <!-- Review Tab -->
+  <div class="tab-content" id="tab-review" role="tabpanel" aria-labelledby="tab-review" style="padding:1.25rem 1.5rem 1.5rem">
+    <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:.75rem;margin-bottom:1rem">
+      <h3 style="margin:0">Review & Approve</h3>
+      <div style="display:flex;gap:.5rem;flex-wrap:wrap">
+        <button class="btn btn-success btn-sm" onclick="approveAll()">Approve All</button>
+        <button class="btn btn-ghost btn-sm" onclick="rejectAll()">Reject All</button>
+      </div>
+    </div>
+
+    <div class="stats" style="margin-bottom:1.25rem">
+      <div class="stat">
+        <div class="stat-bar"></div>
+        <div class="stat-value" style="color:var(--info)" id="reviewTotal">{{ conversions|length }}</div>
+        <div class="stat-label">Total</div>
+      </div>
+      <div class="stat">
+        <div class="stat-bar" style="background:linear-gradient(90deg,var(--warning),#f59e0b)"></div>
+        <div class="stat-value" style="color:var(--warning)" id="reviewPending">{{ conversions|selectattr('review_status','equalto','pending_review')|list|length }}</div>
+        <div class="stat-label">Pending</div>
+      </div>
+      <div class="stat">
+        <div class="stat-bar" style="background:linear-gradient(90deg,var(--success),#10b981)"></div>
+        <div class="stat-value" style="color:var(--success)" id="reviewApproved">{{ conversions|selectattr('review_status','equalto','approved')|list|length }}</div>
+        <div class="stat-label">Approved</div>
+      </div>
+      <div class="stat">
+        <div class="stat-bar" style="background:linear-gradient(90deg,var(--error),#f87171)"></div>
+        <div class="stat-value" style="color:var(--error)" id="reviewRejected">{{ conversions|selectattr('review_status','equalto','rejected')|list|length }}</div>
+        <div class="stat-label">Rejected</div>
+      </div>
+    </div>
+
+    <div id="reviewList">
+      {% for conv in conversions %}
+      <details class="file-item" data-name="{{ conv.name|lower }}" data-review-status="{{ conv.review_status }}">
+        <summary>
+          <span style="display:flex;align-items:center;gap:.5rem;overflow:hidden">
+            <span class="truncate">{{ conv.name }}</span>
+          </span>
+          <span style="display:flex;align-items:center;gap:.5rem;flex-shrink:0">
+            <span class="badge badge-neutral">{{ conv.object_type }}</span>
+            {% if conv.review_status == 'approved' %}<span class="badge badge-success">Approved</span>
+            {% elif conv.review_status == 'rejected' %}<span class="badge badge-error">Rejected</span>
+            {% else %}<span class="badge badge-warning">Pending</span>{% endif %}
+            <span class="chevron">▸</span>
+          </span>
+        </summary>
+        <div style="padding:1rem 1.5rem;border-top:1px solid var(--card-border)">
+          {% set safe_id = conv.name|replace('/', '__')|replace('.', '__') %}
+          <div style="display:flex;gap:.5rem;margin-bottom:1rem;flex-wrap:wrap">
+            {% if conv.review_status != 'approved' %}
+            <button class="btn btn-success btn-sm" onclick="approveConversion('{{ conv.name }}')">✓ Approve</button>
+            {% endif %}
+            {% if conv.review_status != 'rejected' %}
+            <button class="btn btn-ghost btn-sm" onclick="rejectConversion('{{ conv.name }}')">✕ Reject</button>
+            {% endif %}
+            <button class="btn btn-outline btn-sm" onclick="toggleEdit('{{ safe_id }}')">✎ Edit SQL</button>
+          </div>
+          {% if conv.raw_sql %}
+          <div class="code-block" style="margin-top:0">
+            <div class="code-header">
+              <span class="lang">Snowflake (Original)</span>
+              <button class="copy-btn" type="button">Copy</button>
+            </div>
+            <pre><code>{{ conv.raw_sql }}</code></pre>
+          </div>
+          {% endif %}
+          <div class="code-block" style="margin-top:0">
+            <div class="code-header">
+              <span class="lang">{% if conv.review_status == 'approved' %}Approved SQL{% else %}Databricks (Converted){% endif %}</span>
+              <button class="copy-btn" type="button">Copy</button>
+            </div>
+            <pre><code>{{ conv.approved_sql or conv.converted_sql }}</code></pre>
+          </div>
+          <div id="edit-{{ safe_id }}" style="display:none;margin-top:1rem">
+            <label style="font-size:.8rem;font-weight:600;color:var(--text-secondary);margin-bottom:.25rem;display:block">Edit SQL</label>
+            <textarea id="sql-{{ safe_id }}" style="width:100%;min-height:200px;font-family:var(--mono);font-size:.82rem;padding:.75rem;border:1px solid var(--card-border);border-radius:8px;background:var(--bg);color:var(--text)">{{ conv.approved_sql or conv.converted_sql }}</textarea>
+            <div style="display:flex;gap:.5rem;margin-top:.5rem">
+              <button class="btn btn-success btn-sm" onclick="saveConversion('{{ conv.name|replace("'", "\\'") }}', '{{ safe_id }}')">Save</button>
+              <button class="btn btn-ghost btn-sm" onclick="toggleEdit('{{ safe_id }}')">Cancel</button>
+            </div>
+          </div>
+          {% if conv.reviewer_notes %}
+          <div style="margin-top:.75rem;padding:.5rem .75rem;background:var(--bg);border-radius:6px;font-size:.8rem;color:var(--text-secondary)">
+            <strong>Notes:</strong> {{ conv.reviewer_notes }}
+          </div>
+          {% endif %}
+        </div>
+      </details>
+      {% endfor %}
+    </div>
+  </div>
+
+  <!-- Report Tab -->
+  <div class="tab-content" id="tab-report" role="tabpanel" aria-labelledby="tab-report" style="padding:1.25rem 1.5rem 1.5rem">
+    {% if report %}
+    <div class="code-block">
+      <div class="code-header">
+        <span class="lang">Report</span>
+        <button class="copy-btn" type="button">Copy</button>
+      </div>
+      <pre><code>{{ report }}</code></pre>
+    </div>
+    {% else %}
+    <div class="empty-state"><p>No report generated</p></div>
+    {% endif %}
+  </div>
+
+  <!-- Data Tab -->
+  {% if storage_report %}
+  <div class="tab-content" id="tab-data" role="tabpanel" aria-labelledby="tab-data" style="padding:1.25rem 1.5rem 1.5rem">
+    <h3 style="margin-bottom:1rem">Data Migration</h3>
+
+    <!-- Storage Report -->
+    <div class="stats" style="margin-bottom:1.25rem">
+      <div class="stat">
+        <div class="stat-bar" style="background:linear-gradient(90deg,#6366f1,#818cf8)"></div>
+        <div class="stat-value" style="color:#6366f1">{{ storage_report.total_tables }}</div>
+        <div class="stat-label">Total Tables</div>
+      </div>
+      <div class="stat">
+        <div class="stat-bar" style="background:linear-gradient(90deg,#22c55e,#4ade80)"></div>
+        <div class="stat-value" style="color:#22c55e">{{ storage_report.external_tables|length }}</div>
+        <div class="stat-label">External</div>
+      </div>
+      <div class="stat">
+        <div class="stat-bar" style="background:linear-gradient(90deg,#f59e0b,#fbbf24)"></div>
+        <div class="stat-value" style="color:#f59e0b">{{ storage_report.internal_tables|length }}</div>
+        <div class="stat-label">Internal</div>
+      </div>
+      <div class="stat">
+        <div class="stat-bar" style="background:linear-gradient(90deg,#06b6d4,#22d3ee)"></div>
+        <div class="stat-value" style="color:#06b6d4">{{ storage_report.iceberg_tables|length }}</div>
+        <div class="stat-label">Iceberg</div>
+      </div>
+    </div>
+
+    <p style="font-size:.85rem;color:var(--text-secondary);margin-bottom:1.25rem">{{ storage_report.summary }}</p>
+
+    {% if storage_report.cloud_providers %}
+    <div style="margin-bottom:1rem;display:flex;gap:.5rem;flex-wrap:wrap">
+      {% for p in storage_report.cloud_providers %}
+      <span class="badge badge-info">{{ p }}</span>
+      {% endfor %}
+    </div>
+    {% endif %}
+
+    {% if storage_report.stages %}
+    <details style="margin-bottom:1rem">
+      <summary style="cursor:pointer;font-weight:600;font-size:.85rem">Stages ({{ storage_report.stages|length }})</summary>
+      <div class="table-wrap" style="margin-top:.5rem">
+        <table>
+          <thead><tr><th>Stage</th><th>Type</th><th>Location</th></tr></thead>
+          <tbody>
+            {% for s in storage_report.stages %}
+            <tr>
+              <td><code>{{ s.name }}</code></td>
+              <td><span class="badge badge-neutral">{{ s.type }}</span></td>
+              <td style="font-size:.78rem;max-width:300px;overflow:hidden;text-overflow:ellipsis">{{ s.storage_location or '—' }}</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </details>
+    {% endif %}
+
+    <!-- Internal tables → need cloud storage credentials -->
+    {% if storage_report.needs_export %}
+    <div class="card" style="padding:1.5rem;background:var(--warning-light);border:1px solid #fde68a">
+      <div style="display:flex;align-items:flex-start;gap:.75rem">
+        <span style="font-size:1.3rem">!</span>
+        <div style="flex:1">
+          <h4 style="margin-bottom:.25rem;font-size:.9rem">Cloud Storage Credentials Required</h4>
+          <p style="font-size:.8rem;color:var(--text-secondary);margin-bottom:1rem">
+            {{ storage_report.internal_tables|length }} internal table(s) need to be exported from Snowflake to cloud storage first.
+          </p>
+
+          <!-- Provider tabs -->
+          <div style="display:flex;gap:0;margin-bottom:1rem;border-bottom:2px solid var(--card-border)">
+            <button type="button" class="cloud-tab active" onclick="switchCloudTab('aws')" id="tab-aws" style="padding:.5rem 1rem;font-size:.8rem;font-weight:600;border:none;background:none;cursor:pointer;border-bottom:2px solid var(--accent);margin-bottom:-2px;color:var(--accent)">AWS S3</button>
+            <button type="button" class="cloud-tab" onclick="switchCloudTab('azure')" id="tab-azure" style="padding:.5rem 1rem;font-size:.8rem;font-weight:600;border:none;background:none;cursor:pointer;border-bottom:2px solid transparent;margin-bottom:-2px;color:var(--text-muted)">Azure Blob</button>
+            <button type="button" class="cloud-tab" onclick="switchCloudTab('gcs')" id="tab-gcs" style="padding:.5rem 1rem;font-size:.8rem;font-weight:600;border:none;background:none;cursor:pointer;border-bottom:2px solid transparent;margin-bottom:-2px;color:var(--text-muted)">Google GCS</button>
+          </div>
+
+          <form id="dataMigrationForm" onsubmit="return startDataMigration(event)">
+            <!-- AWS S3 panel -->
+            <div id="cloud-aws">
+              <div class="form-row">
+                <div class="form-group">
+                  <label>S3 Bucket</label>
+                  <input type="text" id="s3_bucket" class="form-input" placeholder="my-migration-bucket" value="{{ run.get('s3_bucket', '') }}">
+                </div>
+                <div class="form-group">
+                  <label>Region</label>
+                  <input type="text" id="s3_region" class="form-input" placeholder="us-east-1" value="{{ run.get('s3_region', '') }}">
+                </div>
+              </div>
+              <div class="form-row">
+                <div class="form-group">
+                  <label>AWS Access Key</label>
+                  <input type="text" id="s3_access_key" class="form-input" placeholder="(optional if using IAM role)" value="{{ run.get('s3_access_key', '') }}">
+                </div>
+                <div class="form-group">
+                  <label>AWS Secret Key</label>
+                  <input type="password" id="s3_secret_key" class="form-input" placeholder="(optional if using IAM role)" value="{{ run.get('s3_secret_key', '') }}">
+                </div>
+              </div>
+              <div class="form-row">
+                <div class="form-group">
+                  <label>IAM Role ARN</label>
+                  <input type="text" id="s3_iam_role" class="form-input" placeholder="arn:aws:iam::123456789:role/..." value="{{ run.get('s3_iam_role', '') }}">
+                </div>
+                <div class="form-group">
+                  <label>Storage Integration</label>
+                  <input type="text" id="s3_storage_integration" class="form-input" placeholder="(optional)" value="{{ run.get('s3_storage_integration', '') }}">
+                </div>
+              </div>
+            </div>
+
+            <!-- Azure panel -->
+            <div id="cloud-azure" style="display:none">
+              <div class="form-row">
+                <div class="form-group">
+                  <label>Storage Account</label>
+                  <input type="text" id="azure_account" class="form-input" placeholder="mystorageaccount">
+                </div>
+                <div class="form-group">
+                  <label>Container Name</label>
+                  <input type="text" id="azure_container" class="form-input" placeholder="my-container">
+                </div>
+              </div>
+              <div class="form-row">
+                <div class="form-group">
+                  <label>SAS Token</label>
+                  <input type="password" id="azure_sas_token" class="form-input" placeholder="?sv=2022-...">
+                </div>
+              </div>
+            </div>
+
+            <!-- GCS panel -->
+            <div id="cloud-gcs" style="display:none">
+              <div class="form-row">
+                <div class="form-group">
+                  <label>Bucket Name</label>
+                  <input type="text" id="gcs_bucket" class="form-input" placeholder="my-gcs-bucket">
+                </div>
+                <div class="form-group">
+                  <label>GCP Service Account (JSON key path or Storage Integration)</label>
+                  <input type="text" id="gcs_service_account" class="form-input" placeholder="si_my_storage_integration">
+                </div>
+              </div>
+            </div>
+
+            <div style="display:flex;gap:.5rem;flex-wrap:wrap;margin-top:1rem">
+              <button type="button" class="btn btn-outline" onclick="saveS3Creds()">Save Credentials</button>
+              <button type="submit" class="btn btn-primary" id="dataMigrateBtn">
+                {% if data_migration_results %}Re-run Data Migration{% else %}Start Data Migration{% endif %}
+              </button>
+            </div>
+          </form>
+        </div>
+      </div>
+    </div>
+    {% endif %}
+
+    {% if storage_report.external_tables or storage_report.iceberg_tables %}
+    <div class="card" style="padding:1.25rem;margin-top:1rem">
+      <h4 style="font-size:.85rem;margin-bottom:.5rem">No Export Needed</h4>
+      <p style="font-size:.8rem;color:var(--text-secondary)">
+        {{ storage_report.external_tables|length }} external table(s) can be registered directly from S3.
+        {{ storage_report.iceberg_tables|length }} Iceberg table(s) can be synced directly.
+      </p>
+    </div>
+    {% endif %}
+
+    <!-- Data migration results -->
+    {% if data_migration_results %}
+    <div class="card" style="overflow:hidden;padding:0;margin-top:1rem">
+      <div style="padding:1.25rem 1.5rem;border-bottom:1px solid var(--card-border);display:flex;align-items:center;gap:.5rem">
+        <h3 style="margin-bottom:0">Data Migration Results</h3>
+      </div>
+      <div class="table-wrap" style="border:none;border-radius:0">
+        <table>
+          <thead><tr><th>Table</th><th>Type</th><th>Strategy</th><th>Status</th><th>Message</th></tr></thead>
+          <tbody>
+            {% for r in data_migration_results %}
+            <tr>
+              <td><code>{{ r.table }}</code></td>
+              <td><span class="badge badge-neutral">{{ r.storage_type }}</span></td>
+              <td><span class="badge badge-info">{{ r.strategy }}</span></td>
+              <td>
+                {% if r.success %}<span class="badge badge-success">✓ Success</span>
+                {% else %}<span class="badge badge-error">✗ Failed</span>{% endif %}
+              </td>
+              <td class="text-sm text-muted">{{ r.error or 'OK' }}</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+    {% endif %}
+  </div>
+  {% endif %}
+
+  <!-- Deploy Tab -->
+  {% if deploy_allowed and not deploy_results %}
+  <div class="tab-content" id="tab-deploy" role="tabpanel" aria-labelledby="tab-deploy" style="padding:1.25rem 1.5rem 1.5rem">
+    <div class="card deploy-card" style="text-align:center;padding:2.5rem 2rem">
+      <h3 style="font-size:1.15rem;margin-bottom:.5rem">Ready to Deploy to Databricks</h3>
+      {% set approved_count = conversions|selectattr('review_status','equalto','approved')|list|length %}
+      {% set total_count = conversions|length %}
+      {% if approved_count == 0 %}
+      <p style="color:var(--error);font-size:.85rem;margin-bottom:1rem;font-weight:600">No objects approved yet. Go to the Review tab to approve objects before deploying.</p>
+      {% elif approved_count < total_count %}
+      <p style="color:var(--warning);font-size:.85rem;margin-bottom:1rem">{{ approved_count }} of {{ total_count }} objects approved. {{ total_count - approved_count }} objects will be skipped.</p>
+      {% else %}
+      <p style="color:var(--text-secondary);font-size:.85rem;margin-bottom:1.75rem;max-width:440px;margin-left:auto;margin-right:auto;line-height:1.5">
+        All {{ approved_count }} objects approved. Choose an action below to deploy, test with a dry run, or skip deployment.
+      </p>
+      {% endif %}
+
+      <form action="/deploy/{{ run_id }}" method="post" id="deployForm">
+        <div style="display:flex;gap:.75rem;justify-content:center;flex-wrap:wrap">
+          <button type="submit" name="mode" value="deploy" class="btn btn-success btn-lg" {% if approved_count == 0 %}disabled style="opacity:0.5;cursor:not-allowed"{% else %}onclick="return confirm('Deploy {{ approved_count }} approved object(s) to Databricks? This will execute DDL on your production database.')"{% endif %}>
+            <span class="btn-text">Deploy {{ approved_count }} Object{{ 's' if approved_count != 1 else '' }}</span>
+            <span class="spinner-sm"></span>
+          </button>
+          <button type="submit" name="mode" value="dry_run" class="btn btn-outline btn-lg">
+            Dry Run
+          </button>
+          <button type="submit" name="mode" value="skip" class="btn btn-ghost btn-lg" onclick="return confirm('Skip deployment?')">
+            ⏭ Skip
+          </button>
+        </div>
+      </form>
+    </div>
+  </div>
+  {% endif %}
+
+  {% if deploy_results %}
+  <div class="tab-content" id="tab-deploy" role="tabpanel" aria-labelledby="tab-deploy" style="padding:1.25rem 1.5rem 1.5rem">
+    <div class="card" style="overflow:hidden;padding:0">
+      <div style="padding:1.25rem 1.5rem;border-bottom:1px solid var(--card-border)">
+        <h3 style="margin-bottom:0">Deployment Results</h3>
+      </div>
+      <div class="table-wrap" style="border:none;border-radius:0">
+        <table>
+          <thead><tr><th>Object</th><th>Type</th><th>Status</th><th>Message</th></tr></thead>
+          <tbody>
+            {% for r in deploy_results %}
+            <tr>
+              <td><code>{{ r.object }}</code></td>
+              <td><span class="badge badge-neutral">{{ r.type }}</span></td>
+              <td>
+                {% if r.status == "success" %}<span class="badge badge-success">✓ Success</span>
+                {% elif r.status == "skipped" %}<span class="badge badge-warning">− Skipped</span>
+                {% elif r.status == "dry_run" %}<span class="badge badge-info">◌ Dry Run</span>
+                {% else %}<span class="badge badge-error">✗ {{ r.status }}</span>{% endif %}
+              </td>
+              <td class="text-sm text-muted">{{ r.message or "—" }}</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      <div style="padding:1rem 1.5rem;border-top:1px solid var(--card-border);display:flex;gap:.75rem;justify-content:center">
+        <form action="/deploy/{{ run_id }}" method="post">
+          <button type="submit" name="mode" value="deploy" class="btn btn-success btn-sm">Deploy Again</button>
+        </form>
+        <form action="/deploy/{{ run_id }}" method="post">
+          <button type="submit" name="mode" value="dry_run" class="btn btn-outline btn-sm">Dry Run</button>
+        </form>
+      </div>
+    </div>
+  </div>
+  {% endif %}
+
+</div>
+{% endif %}
+
+<div style="margin-top:1.5rem;display:flex;gap:.75rem;flex-wrap:wrap">
+  <a href="/" class="btn btn-outline">← New Migration</a>
+  {% if run_id and conversions and conversions|length > 0 %}
+  <form action="/retry/{{ run_id }}" method="post" style="display:inline">
+    <button type="submit" class="btn btn-outline">Re-run Conversion (skip extraction)</button>
+  </form>
+  {% endif %}
+</div>
+
+<script>
+  // Tab switching
+  document.querySelectorAll('.tab').forEach(tab=>{
+    tab.addEventListener('click',function(){
+      document.querySelectorAll('.tab').forEach(t=>{t.classList.remove('active');t.setAttribute('aria-selected','false')});
+      document.querySelectorAll('.tab-content').forEach(tc=>tc.classList.remove('active'));
+      this.classList.add('active');
+      this.setAttribute('aria-selected','true');
+      const el=document.getElementById(this.dataset.tab);
+      if(el)el.classList.add('active');
+      localStorage.setItem('results_active_tab', this.dataset.tab);
+    });
+  });
+
+  // Restore active tab from localStorage
+  const savedTab = localStorage.getItem('results_active_tab');
+  if (savedTab) {
+    const tabBtn = document.querySelector('.tab[data-tab="'+savedTab+'"]');
+    if (tabBtn) {
+      document.querySelectorAll('.tab').forEach(t=>{t.classList.remove('active');t.setAttribute('aria-selected','false')});
+      document.querySelectorAll('.tab-content').forEach(tc=>tc.classList.remove('active'));
+      tabBtn.classList.add('active');
+      tabBtn.setAttribute('aria-selected','true');
+      const el = document.getElementById(savedTab);
+      if(el) el.classList.add('active');
+    }
+  }
+
+  // Activate deploy tab if results are present
+  {% if deploy_results %}
+  document.querySelectorAll('.tab').forEach(t=>{t.classList.remove('active');t.setAttribute('aria-selected','false')});
+  document.querySelectorAll('.tab-content').forEach(tc=>tc.classList.remove('active'));
+  const dt=document.querySelector('.tab[data-tab="tab-deploy"]');
+  if(dt){dt.classList.add('active');dt.setAttribute('aria-selected','true');document.getElementById('tab-deploy')?.classList.add('active')}
+  {% endif %}
+
+  // File search filter
+  function filterFiles(q){
+    q=q.toLowerCase();
+    const items=document.querySelectorAll('.file-item');
+    let visible=0;
+    items.forEach(item=>{
+      const name=item.dataset.name||'';
+      const match=!q||name.includes(q);
+      item.style.display=match?'':'none';
+      if(match)visible++;
+    });
+    document.getElementById('fileCount').textContent=visible+' file'+(visible!==1?'s':'');
+    document.getElementById('noResults').style.display=(visible===0)?'block':'none';
+  }
+
+  // Deploy loading state
+  const df=document.getElementById('deployForm');
+  if(df){
+    df.addEventListener('submit',function(){
+      this.querySelectorAll('.btn').forEach(b=>{b.disabled=true;b.classList.add('loading')});
+    });
+  }
+
+  // Review actions
+  async function approveConversion(name){
+    try{
+      const r=await fetch('/api/review/{{ run_id }}/conversions/'+encodeURIComponent(name)+'/approve',{method:'POST'});
+      const d=await r.json();
+      if(d.error){alert(d.error);return}
+      location.reload();
+    }catch(e){alert('Failed: '+e.message)}
+  }
+
+  async function rejectConversion(name){
+    try{
+      const r=await fetch('/api/review/{{ run_id }}/conversions/'+encodeURIComponent(name)+'/reject',{method:'POST'});
+      const d=await r.json();
+      if(d.error){alert(d.error);return}
+      location.reload();
+    }catch(e){alert('Failed: '+e.message)}
+  }
+
+  async function approveAll(){
+    if(!confirm('Approve all converted objects?'))return;
+    try{
+      const r=await fetch('/api/review/{{ run_id }}/approve-all',{method:'POST'});
+      const d=await r.json();
+      if(d.error){alert(d.error);return}
+      location.reload();
+    }catch(e){alert('Failed: '+e.message)}
+  }
+
+  async function rejectAll(){
+    if(!confirm('Reject all objects? This will skip them during deployment.'))return;
+    try{
+      const r=await fetch('/api/review/{{ run_id }}/reject-all',{method:'POST'});
+      const d=await r.json();
+      if(d.error){alert(d.error);return}
+      location.reload();
+    }catch(e){alert('Failed: '+e.message)}
+  }
+
+  function toggleEdit(safeId){
+    const el=document.getElementById('edit-'+safeId);
+    if(el)el.style.display=el.style.display==='none'?'block':'none';
+  }
+
+  async function saveConversion(name, safeId){
+    const textarea=document.getElementById('sql-'+safeId);
+    if(!textarea)return;
+    try{
+      const r=await fetch('/api/review/{{ run_id }}/conversions/'+encodeURIComponent(name),{
+        method:'PUT',
+        headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({approved_sql:textarea.value})
+      });
+      const d=await r.json();
+      if(d.error){alert(d.error);return}
+      location.reload();
+    }catch(e){alert('Failed: '+e.message)}
+  }
+
+  // Data migration form
+  let activeCloudTab = 'aws';
+
+  function switchCloudTab(tab) {
+    activeCloudTab = tab;
+    ['aws','azure','gcs'].forEach(t => {
+      document.getElementById('cloud-'+t).style.display = t===tab ? 'block' : 'none';
+      const tabBtn = document.getElementById('tab-'+t);
+      if(tabBtn){
+        tabBtn.style.borderBottom = t===tab ? '2px solid var(--accent)' : '2px solid transparent';
+        tabBtn.style.color = t===tab ? 'var(--accent)' : 'var(--text-muted)';
+      }
+    });
+  }
+
+  function collectCloudCreds() {
+    const fd = new FormData();
+    fd.set('cloud_provider', activeCloudTab);
+    if(activeCloudTab === 'aws'){
+      fd.set('s3_bucket', document.getElementById('s3_bucket').value);
+      fd.set('s3_region', document.getElementById('s3_region').value);
+      fd.set('s3_access_key', document.getElementById('s3_access_key').value);
+      fd.set('s3_secret_key', document.getElementById('s3_secret_key').value);
+      fd.set('s3_iam_role', document.getElementById('s3_iam_role').value);
+      fd.set('s3_storage_integration', document.getElementById('s3_storage_integration').value);
+    } else if(activeCloudTab === 'azure'){
+      fd.set('azure_account', document.getElementById('azure_account').value);
+      fd.set('azure_container', document.getElementById('azure_container').value);
+      fd.set('azure_sas_token', document.getElementById('azure_sas_token').value);
+    } else if(activeCloudTab === 'gcs'){
+      fd.set('gcs_bucket', document.getElementById('gcs_bucket').value);
+      fd.set('gcs_service_account', document.getElementById('gcs_service_account').value);
+    }
+    return fd;
+  }
+
+  async function saveS3Creds(){
+    const fd = collectCloudCreds();
+    try{
+      const r=await fetch('/api/save-s3-creds/{{ run_id }}',{method:'POST',body:fd});
+      const d=await r.json();
+      if(d.error){alert('Save failed: '+d.error);return}
+      alert('Credentials saved');
+    }catch(e){alert('Request failed: '+e.message)}
+  }
+
+  async function startDataMigration(e){
+    e.preventDefault();
+    const btn=document.getElementById('dataMigrateBtn');
+    btn.disabled=true;btn.textContent='Migrating data...';
+    const fd = collectCloudCreds();
+    try{
+      const r=await fetch('/api/data-migrate/{{ run_id }}',{method:'POST',body:fd});
+      const d=await r.json();
+      if(d.error){alert('Data migration failed: '+d.error);btn.disabled=false;btn.textContent='Start Data Migration';return}
+      location.reload();
+    }catch(e){alert('Request failed: '+e.message);btn.disabled=false;btn.textContent='Start Data Migration'}
+  }
+</script>
+{% endblock %}

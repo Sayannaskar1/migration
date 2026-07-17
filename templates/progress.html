@@ -1,0 +1,197 @@
+{% extends "base.html" %}
+{% block title %}Running Migration…{% endblock %}
+{% block page_icon %}{% endblock %}
+{% block page_title %}Migration <span class="arrow">/</span> In Progress{% endblock %}
+{% set active_page = "results" %}
+
+{% block content %}
+<div class="card" style="text-align:center;padding:3rem 2rem">
+  <div style="width:48px;height:48px;border-radius:50%;border:3px solid var(--card-border);border-top-color:var(--accent);margin:0 auto 1.5rem;animation:spin 1s linear infinite" id="statusIcon"></div>
+  <h3 id="statusTitle" style="font-size:1.2rem;margin-bottom:.5rem">Starting migration…</h3>
+  <p id="statusMessage" style="color:var(--text-secondary);font-size:.9rem;margin-bottom:2rem;max-width:400px;margin-left:auto;margin-right:auto">Preparing Snowflake extractor</p>
+
+  <!-- Progress bar -->
+  <div style="max-width:500px;margin:0 auto 2rem">
+    <div style="display:flex;justify-content:space-between;margin-bottom:.4rem">
+      <span class="text-muted text-sm" id="stepLabel">Step 0 of 9</span>
+      <span class="text-muted text-sm" id="stepPct">0%</span>
+    </div>
+    <div style="width:100%;height:6px;background:var(--bg);border-radius:3px;overflow:hidden">
+      <div id="progressBar" style="width:0%;height:100%;background:linear-gradient(90deg,var(--accent),#6366f1);border-radius:3px;transition:width .4s ease"></div>
+    </div>
+  </div>
+
+  <!-- Step list -->
+  <div style="max-width:380px;margin:0 auto;text-align:left">
+    <div class="step-row" data-step="1" style="display:flex;align-items:center;gap:.6rem;padding:.35rem 0;color:var(--text-muted)">
+      <span class="step-indicator" style="width:20px;text-align:center;font-size:.85rem">○</span>
+      <span style="font-size:.82rem">Connect to Snowflake</span>
+    </div>
+    <div class="step-row" data-step="2" style="display:flex;align-items:center;gap:.6rem;padding:.35rem 0;color:var(--text-muted)">
+      <span class="step-indicator" style="width:20px;text-align:center;font-size:.85rem">○</span>
+      <span style="font-size:.82rem">Extract DDL</span>
+    </div>
+    <div class="step-row" data-step="3" style="display:flex;align-items:center;gap:.6rem;padding:.35rem 0;color:var(--text-muted)">
+      <span class="step-indicator" style="width:20px;text-align:center;font-size:.85rem">○</span>
+      <span style="font-size:.82rem">Load &amp; analyze dependencies</span>
+    </div>
+    <div class="step-row" data-step="4" style="display:flex;align-items:center;gap:.6rem;padding:.35rem 0;color:var(--text-muted)">
+      <span class="step-indicator" style="width:20px;text-align:center;font-size:.85rem">○</span>
+      <span style="font-size:.82rem">Analyze capabilities</span>
+    </div>
+    <div class="step-row" data-step="5" style="display:flex;align-items:center;gap:.6rem;padding:.35rem 0;color:var(--text-muted)">
+      <span class="step-indicator" style="width:20px;text-align:center;font-size:.85rem">○</span>
+      <span style="font-size:.82rem">Convert schemas &amp; translate SQL</span>
+    </div>
+    <div class="step-row" data-step="6" style="display:flex;align-items:center;gap:.6rem;padding:.35rem 0;color:var(--text-muted)">
+      <span class="step-indicator" style="width:20px;text-align:center;font-size:.85rem">○</span>
+      <span style="font-size:.82rem">LLM verification &amp; validation</span>
+    </div>
+    <div class="step-row" data-step="7" style="display:flex;align-items:center;gap:.6rem;padding:.35rem 0;color:var(--text-muted)">
+      <span class="step-indicator" style="width:20px;text-align:center;font-size:.85rem">○</span>
+      <span style="font-size:.82rem">Self-healing &amp; review</span>
+    </div>
+    <div class="step-row" data-step="8" style="display:flex;align-items:center;gap:.6rem;padding:.35rem 0;color:var(--text-muted)">
+      <span class="step-indicator" style="width:20px;text-align:center;font-size:.85rem">○</span>
+      <span style="font-size:.82rem">Validate conversions</span>
+    </div>
+    <div class="step-row" data-step="9" style="display:flex;align-items:center;gap:.6rem;padding:.35rem 0;color:var(--text-muted)">
+      <span class="step-indicator" style="width:20px;text-align:center;font-size:.85rem">○</span>
+      <span style="font-size:.82rem">Generate report</span>
+    </div>
+  </div>
+
+  <div style="margin-top:1.5rem;display:flex;gap:.75rem;justify-content:center">
+    <button class="btn btn-ghost" id="cancelBtn" onclick="cancelMigration()">✕ Cancel Migration</button>
+  </div>
+
+  <div id="errorBox" class="hidden" style="margin-top:1.5rem;padding:1rem;background:var(--error-light);border-radius:var(--radius-sm);text-align:left">
+    <p style="font-size:.82rem;color:var(--error);font-weight:600;margin-bottom:.25rem" id="errorTitle">Migration Failed</p>
+    <pre id="errorText" style="font-size:.75rem;color:var(--error);background:transparent;white-space:pre-wrap;overflow-x:auto"></pre>
+    <a href="/" class="btn btn-outline btn-sm mt-1">← Back to Dashboard</a>
+  </div>
+</div>
+
+<script>
+  const runId = '{{ run_id }}';
+  let pollCount = 0;
+  let failCount = 0;
+  let cancelRequested = false;
+
+  function setStatus(state) {
+    const el = document.getElementById('statusIcon');
+    el.className = '';
+    if (state === 'running') el.style.animation = 'spin 1s linear infinite';
+    else if (state === 'done') { el.style.animation = 'none'; el.style.borderColor = 'var(--success)'; }
+    else if (state === 'error') { el.style.animation = 'none'; el.style.borderColor = 'var(--error)'; }
+    else if (state === 'cancelled') { el.style.animation = 'none'; el.style.borderColor = 'var(--text-muted)'; }
+  }
+
+  function poll(){
+    fetch('/api/progress/'+runId).then(r=>r.json()).then(data=>{
+      // Cancel requested and still polling — show cancelling state
+      if(cancelRequested && !data.done){
+        setStatus('cancelled');
+        document.getElementById('statusTitle').textContent = 'Cancelling...';
+        document.getElementById('statusMessage').textContent = 'Waiting for current operation to stop...';
+        document.getElementById('cancelBtn').disabled=true;
+        document.getElementById('cancelBtn').textContent='Cancelling...';
+        setTimeout(poll, 1000);
+        return;
+      }
+
+      if(data.error && !data.progress){
+        showError(data.error);
+        return;
+      }
+      const p = data.progress || {};
+      const step = p.step || 0;
+      const total = p.total || 9;
+      const msg = p.message || 'Working...';
+      const done = data.done;
+      const error = data.error;
+
+      const pct = total > 0 ? Math.round(step / total * 100) : 0;
+      document.getElementById('progressBar').style.width = Math.min(pct, 100) + '%';
+      document.getElementById('stepLabel').textContent = 'Step ' + step + ' of ' + total;
+      document.getElementById('stepPct').textContent = pct + '%';
+      document.getElementById('statusMessage').textContent = msg;
+
+      if(step > 0){
+        setStatus('running');
+        document.getElementById('statusTitle').textContent = step < total ? msg : 'Migration Complete!';
+      }
+
+      // Update step indicators
+      document.querySelectorAll('.step-row').forEach(el => {
+        const s = parseInt(el.dataset.step);
+        const ind = el.querySelector('.step-indicator');
+        if(s < step){
+          ind.textContent = '✓'; el.style.color = 'var(--success)';
+        } else if(s === step){
+          ind.textContent = '◌'; el.style.color = 'var(--accent)';
+          el.style.fontWeight = '600';
+        }
+      });
+
+      if(done){
+        if(cancelRequested || (error && error.includes('Cancelled'))){
+          setStatus('cancelled');
+          document.getElementById('statusTitle').textContent = 'Migration Cancelled';
+          document.getElementById('statusMessage').textContent = '';
+          document.getElementById('cancelBtn').style.display='none';
+          document.getElementById('errorBox').classList.remove('hidden');
+          document.getElementById('errorTitle').textContent = 'Migration Cancelled';
+          document.getElementById('errorText').textContent = error || 'Cancelled by user';
+          document.getElementById('errorBox').querySelector('.btn').textContent = '← Dashboard';
+          return;
+        }
+        if(error){ showError(error); return; }
+        setStatus('done');
+        document.getElementById('statusTitle').textContent = 'Migration Complete!';
+        document.getElementById('statusMessage').textContent = 'Redirecting to results...';
+        setTimeout(() => { window.location.href = '/results/' + runId; }, 800);
+        return;
+      }
+
+      pollCount++;
+      failCount = 0;
+      setTimeout(poll, 1500);
+    }).catch(() => {
+      failCount++;
+      if(failCount < 30) setTimeout(poll, 2000);
+      else{
+        document.getElementById('statusMessage').textContent = 'Connection lost. Retrying...';
+        failCount = 0;
+        setTimeout(poll, 5000);
+      }
+    });
+  }
+
+  function cancelMigration(){
+    if(!confirm('Cancel the running migration?'))return;
+    cancelRequested = true;
+    document.getElementById('cancelBtn').disabled=true;
+    document.getElementById('cancelBtn').textContent='Cancelling...';
+    setStatus('cancelled');
+    document.getElementById('statusTitle').textContent = 'Cancelling...';
+    document.getElementById('statusMessage').textContent = 'Sending cancel request...';
+    fetch('/api/cancel/'+runId,{method:'POST'}).catch(()=>{
+      showToast('Cancel request failed — try again','error');
+      document.getElementById('cancelBtn').disabled=false;
+      document.getElementById('cancelBtn').textContent='✕ Cancel Migration';
+    });
+  }
+
+  function showError(err){
+    setStatus('error');
+    document.getElementById('statusTitle').textContent = 'Migration Failed';
+    document.getElementById('statusMessage').textContent = '';
+    document.getElementById('errorBox').classList.remove('hidden');
+    document.getElementById('errorTitle').textContent = 'Migration Failed';
+    document.getElementById('errorText').textContent = err;
+  }
+
+  setTimeout(poll, 1000);
+</script>
+{% endblock %}

@@ -1,0 +1,235 @@
+{
+  "data_types": {
+    "NUMBER": {"databricks": "DECIMAL", "params": {"precision": 38, "scale": 0}},
+    "NUMBER(*,0)": {"databricks": "BIGINT"},
+    "DECIMAL": {"databricks": "DECIMAL"},
+    "NUMERIC": {"databricks": "DECIMAL"},
+    "INT": {"databricks": "INT"},
+    "INTEGER": {"databricks": "INT"},
+    "BIGINT": {"databricks": "BIGINT"},
+    "SMALLINT": {"databricks": "SMALLINT"},
+    "TINYINT": {"databricks": "TINYINT"},
+    "BYTEINT": {"databricks": "TINYINT"},
+    "FLOAT": {"databricks": "DOUBLE"},
+    "FLOAT4": {"databricks": "FLOAT"},
+    "FLOAT8": {"databricks": "DOUBLE"},
+    "DOUBLE": {"databricks": "DOUBLE"},
+    "DOUBLE PRECISION": {"databricks": "DOUBLE"},
+    "REAL": {"databricks": "DOUBLE"},
+    "VARCHAR": {"databricks": "STRING"},
+    "VARCHAR(16777216)": {"databricks": "STRING"},
+    "CHAR": {"databricks": "STRING"},
+    "CHARACTER": {"databricks": "STRING"},
+    "STRING": {"databricks": "STRING"},
+    "TEXT": {"databricks": "STRING"},
+    "NVARCHAR": {"databricks": "STRING"},
+    "NCHAR": {"databricks": "STRING"},
+    "BINARY": {"databricks": "BINARY"},
+    "VARBINARY": {"databricks": "BINARY"},
+    "BOOLEAN": {"databricks": "BOOLEAN"},
+    "DATE": {"databricks": "DATE"},
+    "DATETIME": {"databricks": "TIMESTAMP"},
+    "TIME": {"databricks": "TIMESTAMP"},
+    "TIMESTAMP": {"databricks": "TIMESTAMP"},
+    "TIMESTAMP_NTZ": {"databricks": "TIMESTAMP"},
+    "TIMESTAMP_LTZ": {"databricks": "TIMESTAMP"},
+    "TIMESTAMP_TZ": {"databricks": "TIMESTAMP"},
+    "VARIANT": {"databricks": "STRING"},
+    "OBJECT": {"databricks": "STRUCT<col1:string>", "note": "Requires manual schema definition"},
+    "ARRAY": {"databricks": "ARRAY<STRING>", "note": "Requires manual element type definition"},
+    "GEOGRAPHY": {"databricks": "STRING", "note": "Consider using H3 or WKT format"}
+  },
+  "sql_functions": {
+    "IFF": {
+      "databricks": "CASE WHEN {condition} THEN {true_val} ELSE {false_val} END",
+      "description": "Standard SQL CASE expression"
+    },
+    "QUALIFY": {
+      "databricks": "Requires subquery wrapping",
+      "description": "QUALIFY must be wrapped in a subquery with WHERE rn=N"
+    },
+    "LATERAL FLATTEN": {
+      "databricks": "LATERAL VIEW EXPLODE",
+      "description": "Use lateral view explode() or cross join unnest()"
+    },
+    "ARRAY_AGG": {
+      "databricks": "COLLECT_LIST",
+      "description": "Collect list with implicit ordering"
+    },
+    "OBJECT_CONSTRUCT": {
+      "databricks": "NAMED_STRUCT",
+      "description": "Construct struct from key-value pairs"
+    },
+    "OBJECT_AGG": {
+      "databricks": "MAP_FROM_ARRAYS",
+      "description": "Aggregate key-value pairs into map"
+    },
+    "ARRAY_CONSTRUCT": {
+      "databricks": "ARRAY",
+      "description": "Construct literal array"
+    },
+    "ARRAY_CONTAINS": {
+      "databricks": "ARRAY_CONTAINS",
+      "description": "Check if array contains element"
+    },
+    "SPLIT": {
+      "databricks": "SPLIT",
+      "description": "Split string into array"
+    },
+    "LISTAGG": {
+      "databricks": "COLLECT_LIST",
+      "description": "Use collect_list + concat_ws"
+    },
+    "CONCAT_LISTAGG": {
+      "databricks": "CONCAT_WS",
+      "description": "Use concat_ws with collect_list"
+    },
+    "TRY_CAST": {
+      "databricks": "TRY_CAST",
+      "description": "Same in Databricks"
+    },
+    "ZEROIFNULL": {
+      "databricks": "COALESCE(value, 0)",
+      "description": "Replace null with zero"
+    },
+    "NULLIFZERO": {
+      "databricks": "IF(value = 0, NULL, value)",
+      "description": "Replace zero with null"
+    },
+    "TO_VARCHAR": {
+      "databricks": "CAST(value AS STRING)",
+      "description": "Convert to string"
+    },
+    "TO_DATE": {
+      "databricks": "TO_DATE",
+      "description": "Same in Databricks"
+    },
+    "TO_TIMESTAMP": {
+      "databricks": "TO_TIMESTAMP",
+      "description": "Same in Databricks"
+    },
+    "TO_NUMBER": {
+      "databricks": "CAST(value AS DECIMAL)",
+      "description": "Cast to decimal"
+    },
+    "TO_BOOLEAN": {
+      "databricks": "CAST(value AS BOOLEAN)",
+      "description": "Cast to boolean"
+    },
+    "TO_ARRAY": {
+      "databricks": "ARRAY(value)",
+      "description": "Wrap in array"
+    },
+    "TO_OBJECT": {
+      "databricks": "NAMED_STRUCT('key', value)",
+      "description": "Convert to struct"
+    },
+    "TO_JSON": {
+      "databricks": "TO_JSON",
+      "description": "Same in Databricks"
+    },
+    "PARSE_JSON": {
+      "databricks": "FROM_JSON",
+      "description": "Parse JSON string"
+    },
+    "ARRAY_SIZE": {
+      "databricks": "SIZE",
+      "description": "Array length"
+    },
+    "ARRAY_LENGTH": {
+      "databricks": "SIZE",
+      "description": "Array length"
+    },
+    "GET": {
+      "databricks": "value[index]",
+      "description": "Bracket notation for array/struct access"
+    },
+    "GET_IGNORE_CASE": {
+      "databricks": "value['key']",
+      "description": "Case-insensitive object access via bracket"
+    },
+    "WIDTH_BUCKET": {
+      "databricks": "WIDTH_BUCKET",
+      "description": "Same in Databricks"
+    },
+    "RANDOM": {
+      "databricks": "RAND",
+      "description": "Random number"
+    },
+    "RANDSTR": {
+      "databricks": "Not directly available",
+      "description": "Use concat of random numbers or UDF"
+    },
+    "SEQ1": {
+      "databricks": "ROW_NUMBER() OVER (ORDER BY 1)",
+      "description": "Sequence generator"
+    },
+    "SEQ2": {
+      "databricks": "ROW_NUMBER() OVER (ORDER BY 1)",
+      "description": "Sequence generator"
+    },
+    "SEQ4": {
+      "databricks": "ROW_NUMBER() OVER (ORDER BY 1)",
+      "description": "Sequence generator"
+    },
+    "SEQ8": {
+      "databricks": "ROW_NUMBER() OVER (ORDER BY 1)",
+      "description": "Sequence generator"
+    },
+    "DATEADD": {
+      "databricks": "DATE_ADD",
+      "description": "Add to date"
+    },
+    "DATEDIFF": {
+      "databricks": "DATEDIFF",
+      "description": "Date difference"
+    },
+    "DATE_TRUNC": {
+      "databricks": "DATE_TRUNC",
+      "description": "Truncate date"
+    },
+    "LAST_DAY": {
+      "databricks": "LAST_DAY",
+      "description": "Last day of month"
+    },
+    "MONTHNAME": {
+      "databricks": "DATE_FORMAT(date, 'MMM')",
+      "description": "Month name"
+    },
+    "DAYNAME": {
+      "databricks": "DATE_FORMAT(date, 'EEE')",
+      "description": "Day name"
+    },
+    "CONVERT_TIMEZONE": {
+      "databricks": "CONVERT_TIMEZONE",
+      "description": "Timezone conversion"
+    },
+    "CURRENT_TIMESTAMP": {
+      "databricks": "CURRENT_TIMESTAMP",
+      "description": "Same in Databricks"
+    },
+    "SYSDATE": {
+      "databricks": "CURRENT_DATE",
+      "description": "Current date"
+    },
+    "FLATTEN": {
+      "databricks": "EXPLODE",
+      "description": "Explode array"
+    }
+  },
+  "reserved_keywords": {
+    "snowflake_specific": ["QUALIFY", "LATERAL", "FLATTEN", "IFF", "START_WITH", "END_WITH", "CONTAINS", "ILIKE", "ILIKE ANY", "RLIKE", "REGEXP", "PIVOT", "UNPIVOT", "SAMPLE", "TABLESAMPLE", "MATCH_RECOGNIZE"],
+    "databricks_specific": ["BRICKHOUSE", "DELTA", "OPTIMIZE", "ZORDER", "VACUUM", "DESCRIBE HISTORY", "FSCK", "CONVERT TO DELTA", "MERGE INTO", "WHEN NOT MATCHED", "WHEN MATCHED", "MINUS", "EXCEPT ALL", "INTERSECT ALL", "LATERAL VIEW", "EXPLODE", "POSEXPLODE", "OUTER EXPLODE", "STACK", "MAP_FROM_ARRAYS", "NAMED_STRUCT", "STRUCT", "ARRAY", "MAP", "UNIONTYPE"]
+  },
+  "syntax_notes": {
+    "comment_style": "-- single line, /* multi-line */",
+    "string_literals": "Single quotes in both",
+    "identifier_quoting": "Double quotes in both",
+    "case_sensitivity": "Snowflake: case-insensitive by default, Databricks: case-insensitive for SQL",
+    "schema_management": "Snowflake: CREATE SCHEMA IF NOT EXISTS, Databricks: CREATE SCHEMA IF NOT EXISTS",
+    "temporary_tables": "Snowflake: CREATE TEMPORARY TABLE, Databricks: CREATE TEMPORARY VIEW or CREATE TEMP TABLE",
+    "cte_support": "Both support WITH clause",
+    "window_functions": "Both support standard window functions",
+    "merge_syntax": "Snowflake: MERGE INTO ... USING, Databricks: MERGE INTO ... USING"
+  }
+}
