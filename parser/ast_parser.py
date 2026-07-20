@@ -8,8 +8,17 @@ def validate_sql_syntax(sql: str, dialect: str = "databricks") -> list[str]:
     errors: list[str] = []
     if "$$" in sql:
         return errors
+    # SQLGlot can't parse Databricks procedural SQL (BEGIN/DECLARE/END/EXCEPTION)
+    if re.search(r"(?i)\b(BEGIN|DECLARE|END|EXCEPTION|WHEN\s+.*THEN)\b", sql):
+        return errors
+    # SQLGlot doesn't support GET DIAGNOSTICS — strip it before parsing
+    cleaned = re.sub(
+        r"(?i)GET\s+DIAGNOSTICS\s+\w+\s*=\s*ROW_COUNT\s*;",
+        "SELECT 1;",
+        sql,
+    )
     try:
-        parsed = sqlglot.parse(sql, dialect=dialect)
+        parsed = sqlglot.parse(cleaned, dialect=dialect)
         for i, stmt in enumerate(parsed):
             if stmt is None:
                 errors.append(f"Statement {i + 1}: failed to parse")

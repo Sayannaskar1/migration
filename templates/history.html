@@ -37,8 +37,9 @@
     {% if run.summary %}
     <div style="display:flex;gap:1rem;font-size:.8rem;color:var(--text-secondary)">
       <span><strong style="color:var(--text)">{{ run.summary.objects or 0 }}</strong> objects</span>
-      <span><strong style="color:var(--success)">{{ run.summary.success or 0 }}</strong> ok</span>
-      <span><strong style="color:var(--error)">{{ run.summary.failed or 0 }}</strong> failed</span>
+      <span><strong style="color:var(--success)">{{ run.summary.success or 0 }}</strong> auto</span>
+      <span><strong style="color:var(--accent)">{{ run.summary.architectural or 0 }}</strong> arch</span>
+      <span><strong style="color:var(--error)">{{ run.summary.failed or 0 }}</strong> errors</span>
       <span><strong>{{ run.summary.pass_rate or 0 }}%</strong> pass</span>
     </div>
     {% endif %}

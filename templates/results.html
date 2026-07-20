@@ -31,9 +31,9 @@
   <div class="step-connector done"></div>
   <div class="step done"><span class="step-circle">✓</span><span class="step-label">Convert</span></div>
   <div class="step-connector done"></div>
-  <div class="step {% if deploy_results %}done{% elif deploy_allowed %}active{% else %}active{% endif %}"><span class="step-circle">{% if deploy_results %}✓{% else %}3{% endif %}</span><span class="step-label">Review</span></div>
-  <div class="step-connector {% if deploy_results %}done{% endif %}"></div>
-  <div class="step {% if deploy_results %}done{% elif deploy_allowed %}active{% endif %}"><span class="step-circle">{% if deploy_results %}✓{% else %}4{% endif %}</span><span class="step-label">Deploy</span></div>
+  <div class="step {% if deploy_results %}done{% elif deploying %}running{% elif deploy_allowed %}active{% else %}active{% endif %}"><span class="step-circle">{% if deploy_results %}✓{% elif deploying %}⟳{% else %}3{% endif %}</span><span class="step-label">{% if deploying %}Deploying…{% else %}Review{% endif %}</span></div>
+  <div class="step-connector {% if deploy_results %}done{% elif deploying %}done{% endif %}"></div>
+  <div class="step {% if deploy_results %}done{% elif deploying %}running{% elif deploy_allowed %}active{% endif %}"><span class="step-circle">{% if deploy_results %}✓{% elif deploying %}⟳{% else %}4{% endif %}</span><span class="step-label">{% if deploying %}Deploying…{% else %}Deploy{% endif %}</span></div>
 </div>
 
 {% if summary %}
@@ -46,7 +46,22 @@
   <div class="stat">
     <div class="stat-bar" style="background:linear-gradient(90deg,var(--success),#10b981)"></div>
     <div class="stat-value" style="color:var(--success)">{{ summary.success }}</div>
-    <div class="stat-label">Converted</div>
+    <div class="stat-label">Auto Converted</div>
+  </div>
+  <div class="stat">
+    <div class="stat-bar" style="background:linear-gradient(90deg,#f59e0b,#fb923c)"></div>
+    <div class="stat-value" style="color:#f59e0b">{{ summary.manual_review or 0 }}</div>
+    <div class="stat-label">Manual Review</div>
+  </div>
+  <div class="stat">
+    <div class="stat-bar" style="background:linear-gradient(90deg,var(--accent),#8b5cf6)"></div>
+    <div class="stat-value" style="color:var(--accent)">{{ summary.architectural or 0 }}</div>
+    <div class="stat-label">Architectural</div>
+  </div>
+  <div class="stat">
+    <div class="stat-bar" style="background:linear-gradient(90deg,#f97316,#f59e0b)"></div>
+    <div class="stat-value" style="color:#f97316">{{ summary.issues or 0 }}</div>
+    <div class="stat-label">Issues</div>
   </div>
   <div class="stat">
     <div class="stat-bar" style="background:linear-gradient(90deg,var(--error),#f87171)"></div>
@@ -62,8 +77,12 @@
 
 {% if conversions %}
 <div class="card" style="padding:0;overflow:hidden">
-  <div style="padding:1.25rem 1.5rem 0">
+  <div style="padding:1.25rem 1.5rem 0;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:.5rem">
     <h3 style="margin-bottom:.75rem">Object Inventory</h3>
+    <div style="display:flex;gap:.35rem;margin-bottom:.75rem">
+      <button class="btn btn-ghost btn-sm" onclick="expandAll()">Expand All</button>
+      <button class="btn btn-ghost btn-sm" onclick="collapseAll()">Collapse All</button>
+    </div>
   </div>
   <div id="inventoryList">
     {% for conv in conversions %}
@@ -130,6 +149,7 @@
         <input type="text" id="fileSearch" placeholder="Search files..." oninput="filterFiles(this.value)">
       </div>
       <span class="badge badge-info" id="fileCount">{{ conversions|length }} files</span>
+      <button class="btn btn-ghost btn-sm dark-mode-btn" onclick="toggleDarkMode()" style="flex-shrink:0">🌙 Dark Mode</button>
     </div>
 
     <div id="fileList">
@@ -269,17 +289,20 @@
   </div>
 
   <!-- Report Tab -->
-  <div class="tab-content" id="tab-report" role="tabpanel" aria-labelledby="tab-report" style="padding:1.25rem 1.5rem 1.5rem">
+  <div class="tab-content" id="tab-report" role="tabpanel" aria-labelledby="tab-report" style="padding:0;background:var(--bg-secondary)">
     {% if report %}
-    <div class="code-block">
-      <div class="code-header">
-        <span class="lang">Report</span>
-        <button class="copy-btn" type="button">Copy</button>
+    <div style="padding:.75rem 1.5rem;background:var(--bg-secondary);border-bottom:1px solid var(--border);flex-shrink:0;display:flex;align-items:center;gap:.75rem">
+      <span style="font-weight:600;font-size:.9rem;color:var(--text-muted);flex:1">Migration Report</span>
+      <div style="display:flex;gap:.35rem">
+        <a href="/api/report/{{ run_id }}/view" class="btn btn-sm" target="_blank" style="flex-shrink:0">Open Report</a>
+        <a href="/api/report/{{ run_id }}/download" class="btn btn-sm btn-outline" download style="flex-shrink:0">Download Report</a>
       </div>
-      <pre><code>{{ report }}</code></pre>
+    </div>
+    <div id="report-container" class="report-body-wrap">
+      {{ report_body|safe }}
     </div>
     {% else %}
-    <div class="empty-state"><p>No report generated</p></div>
+    <div class="empty-state" style="padding:1.25rem 1.5rem 1.5rem"><p>No report generated</p></div>
     {% endif %}
   </div>
 
@@ -482,7 +505,63 @@
   {% endif %}
 
   <!-- Deploy Tab -->
-  {% if deploy_allowed and not deploy_results %}
+  {% if deploying %}
+  <div class="tab-content" id="tab-deploy" role="tabpanel" aria-labelledby="tab-deploy" style="padding:1.25rem 1.5rem 1.5rem">
+
+    <div class="card" style="padding:1.5rem">
+      <div style="display:flex;align-items:center;gap:.75rem;margin-bottom:1rem">
+        <div id="deploy-status-icon" style="width:16px;height:16px;border-radius:50%;border:2px solid var(--accent);border-top-color:transparent;animation:spin 1s linear infinite;flex-shrink:0"></div>
+        <div style="flex:1">
+          <div style="font-weight:600;font-size:.95rem" id="deploy-status-title">Deploying to Databricks…</div>
+          <div style="font-size:.78rem;color:var(--text-secondary);margin-top:2px" id="deploy-status-message">Initializing</div>
+        </div>
+        <div style="text-align:right;font-size:.72rem;color:var(--text-muted)" id="deploy-elapsed">00:00</div>
+      </div>
+
+      <!-- Pipeline phases -->
+      <div style="margin-bottom:1rem" id="deploy-phases">
+        {% for phase in ["Initializing Deployment", "Infrastructure Setup", "Tables", "Views", "Functions", "Procedures", "Finalizing"] %}
+        <div class="dp-phase" data-phase="{{ loop.index }}" style="display:flex;align-items:center;gap:.5rem;padding:.25rem 0;font-size:.78rem;color:var(--text-muted)">
+          <span class="dp-indicator" style="width:18px;text-align:center;font-size:.75rem">&#9679;</span>
+          <span>{{ phase }}</span>
+        </div>
+        {% endfor %}
+      </div>
+
+      <!-- Progress bar -->
+      <div style="margin-bottom:1rem">
+        <div style="display:flex;justify-content:space-between;font-size:.72rem;color:var(--text-muted);margin-bottom:4px">
+          <span id="deploy-step-label">Step 0 of 0</span>
+          <span id="deploy-pct">0%</span>
+        </div>
+        <div style="width:100%;height:6px;background:var(--bg);border-radius:3px;overflow:hidden">
+          <div id="deploy-progress-bar" style="width:0%;height:100%;background:linear-gradient(90deg,var(--accent),#6366f1);border-radius:3px;transition:width .3s ease"></div>
+        </div>
+      </div>
+
+      <!-- Current object -->
+      <div id="deploy-current" style="display:none;margin-bottom:1rem;padding:.75rem;background:var(--bg);border-radius:6px;font-size:.78rem">
+        <div style="font-weight:600;margin-bottom:4px;color:var(--text)" id="deploy-current-name"></div>
+        <pre style="font-size:.7rem;color:var(--text-secondary);white-space:pre-wrap;word-break:break-all;max-height:80px;overflow-y:auto;margin:0" id="deploy-current-sql"></pre>
+      </div>
+
+      <!-- Activity log -->
+      <div>
+        <div style="font-size:.75rem;font-weight:600;color:var(--text-muted);margin-bottom:4px">Activity Log</div>
+        <div id="deploy-log" style="font-size:.72rem;font-family:var(--mono);max-height:200px;overflow-y:auto;background:#0c1222;color:#e2e8f0;padding:.75rem;border-radius:6px;line-height:1.6"></div>
+      </div>
+
+      <!-- Cancel button -->
+      <div style="margin-top:1rem;text-align:center">
+        <button id="deploy-cancel-btn" class="btn btn-ghost btn-sm" onclick="cancelDeploy()" style="color:var(--error);border-color:var(--error)">
+          Cancel Deployment
+        </button>
+        <div id="deploy-cancelling" style="display:none;font-size:.78rem;color:var(--text-muted);padding:.5rem">Cancelling…</div>
+      </div>
+    </div>
+
+  </div>
+  {% elif deploy_allowed and not deploy_results %}
   <div class="tab-content" id="tab-deploy" role="tabpanel" aria-labelledby="tab-deploy" style="padding:1.25rem 1.5rem 1.5rem">
     <div class="card deploy-card" style="text-align:center;padding:2.5rem 2rem">
       <h3 style="font-size:1.15rem;margin-bottom:.5rem">Ready to Deploy to Databricks</h3>
@@ -556,6 +635,11 @@
 
 </div>
 {% endif %}
+
+<style>
+  #tab-report.active{display:flex !important;flex-direction:column}
+  #tab-report .report-body-wrap{flex:1;overflow:auto}
+</style>
 
 <div style="margin-top:1.5rem;display:flex;gap:.75rem;flex-wrap:wrap">
   <a href="/" class="btn btn-outline">← New Migration</a>
@@ -742,5 +826,170 @@
       location.reload();
     }catch(e){alert('Request failed: '+e.message);btn.disabled=false;btn.textContent='Start Data Migration'}
   }
+
+  // ═══════════════════════════════════════════════
+  // Deploy Pipeline Progress Polling
+  // ═══════════════════════════════════════════════
+  {% if deploying %}
+  const DEPLOY_RUN_ID = '{{ run_id }}';
+  const PHASE_LABELS = ['Initializing Deployment', 'Infrastructure Setup', 'Tables', 'Views', 'Functions', 'Procedures', 'Finalizing'];
+  let deployPollCount = 0;
+  let deployFailCount = 0;
+
+  function cancelDeploy(){
+    fetch('/api/deploy-cancel/'+DEPLOY_RUN_ID, {method:'POST'}).then(function(r){return r.json()}).then(function(d){
+      if(d.ok){
+        document.getElementById('deploy-cancel-btn').style.display = 'none';
+        document.getElementById('deploy-cancelling').style.display = 'block';
+      }
+    }).catch(function(e){alert('Cancel request failed: '+e.message)});
+  }
+
+  function pollDeploy(){
+    fetch('/api/deploy-progress/'+DEPLOY_RUN_ID).then(r=>r.json()).then(data=>{
+      if(data.cancelled && !data.done){
+        document.getElementById('deploy-cancel-btn').style.display = 'none';
+        document.getElementById('deploy-cancelling').style.display = 'block';
+        document.getElementById('deploy-status-title').textContent = 'Cancelling…';
+        document.getElementById('deploy-status-message').textContent = 'Waiting for current operation to stop…';
+        setTimeout(pollDeploy, 1000);
+        return;
+      }
+      if(data.error && data.done){
+        if(data.error === 'cancelled'){
+          document.getElementById('deploy-status-title').textContent = 'Deployment Cancelled';
+          document.getElementById('deploy-status-message').textContent = 'Deployment was cancelled by the user.';
+          document.getElementById('deploy-status-icon').style.borderColor = 'var(--warning)';
+          document.getElementById('deploy-status-icon').style.animation = 'none';
+          document.getElementById('deploy-cancel-btn').style.display = 'none';
+          document.getElementById('deploy-cancelling').style.display = 'none';
+        } else {
+          document.getElementById('deploy-status-title').textContent = 'Deployment Failed';
+          document.getElementById('deploy-status-message').textContent = data.error;
+          document.getElementById('deploy-status-icon').style.borderColor = 'var(--error)';
+          document.getElementById('deploy-status-icon').style.animation = 'none';
+        }
+        return;
+      }
+
+      // Update phases
+      const currentPhase = data.phase_num || 0;
+      document.querySelectorAll('.dp-phase').forEach(el => {
+        const pn = parseInt(el.dataset.phase);
+        const ind = el.querySelector('.dp-indicator');
+        if(pn < currentPhase){
+          ind.textContent = '✓';
+          el.style.color = 'var(--success)';
+        } else if(pn === currentPhase){
+          ind.textContent = '◌';
+          el.style.color = 'var(--accent)';
+          el.style.fontWeight = '600';
+        }
+      });
+
+      // Progress bar
+      const total = data.total_objects || 1;
+      const idx = data.object_idx || 0;
+      const pct = Math.min(Math.round(idx / total * 100), 100);
+      document.getElementById('deploy-progress-bar').style.width = pct+'%';
+      document.getElementById('deploy-step-label').textContent = 'Step '+idx+' of '+total;
+      document.getElementById('deploy-pct').textContent = pct+'%';
+
+      // Status
+      document.getElementById('deploy-status-message').textContent = data.message || 'Working...';
+      if(data.current_object){
+        document.getElementById('deploy-current').style.display = 'block';
+        document.getElementById('deploy-current-name').textContent = data.current_object;
+        if(data.current_sql){
+          document.getElementById('deploy-current-sql').textContent = data.current_sql;
+        }
+      }
+
+      // Elapsed
+      if(data.elapsed){
+        const m = Math.floor(data.elapsed / 60);
+        const s = data.elapsed % 60;
+        document.getElementById('deploy-elapsed').textContent = String(m).padStart(2,'0')+':'+String(s).padStart(2,'0');
+      }
+
+      // Activity log
+      const logEl = document.getElementById('deploy-log');
+      if(data.activity_log && data.activity_log.length > 0){
+        logEl.innerHTML = data.activity_log.map(function(e){
+          const color = e.type === 'success' ? '#22c55e' : e.type === 'error' ? '#ef4444' : e.type === 'warning' ? '#f59e0b' : e.type === 'skipped' ? '#94a3b8' : '#e2e8f0';
+          return '<div style="display:flex;gap:.5rem"><span style="color:var(--text-muted)">'+e.time+'</span><span style="color:'+color+'">'+e.message+'</span></div>';
+        }).join('');
+        logEl.scrollTop = logEl.scrollHeight;
+      }
+
+      // Check completion
+      if(data.done){
+        document.getElementById('deploy-status-icon').style.borderColor = data.error ? 'var(--error)' : 'var(--success)';
+        document.getElementById('deploy-status-icon').style.animation = 'none';
+        document.getElementById('deploy-status-title').textContent = data.error ? 'Deployment Failed' : 'Deployment Complete';
+        if(!data.error && data.deploy_results){
+          setTimeout(function(){ location.href = '/results/'+DEPLOY_RUN_ID; }, 1500);
+          return;
+        }
+        if(!data.error){
+          setTimeout(function(){ location.href = '/results/'+DEPLOY_RUN_ID; }, 1500);
+          return;
+        }
+        return;
+      }
+
+      deployPollCount++;
+      deployFailCount = 0;
+      setTimeout(pollDeploy, 1000);
+    }).catch(function(){
+      deployFailCount++;
+      if(deployFailCount < 30) setTimeout(pollDeploy, 2000);
+      else setTimeout(pollDeploy, 5000);
+    });
+  }
+
+  // Auto-switch to deploy tab
+  document.querySelectorAll('.tab').forEach(function(t){
+    t.classList.remove('active');
+    t.setAttribute('aria-selected','false');
+  });
+  document.querySelectorAll('.tab-content').forEach(function(tc){
+    tc.classList.remove('active');
+  });
+  var deployTab = document.querySelector('.tab[data-tab="tab-deploy"]');
+  if(deployTab){
+    deployTab.classList.add('active');
+    deployTab.setAttribute('aria-selected','true');
+    document.getElementById('tab-deploy').classList.add('active');
+  }
+
+  setTimeout(pollDeploy, 1000);
+  {% endif %}
+
+  // Expand / Collapse All
+  function expandAll() {
+    document.querySelectorAll('.file-item').forEach(el => el.open = true);
+  }
+  function collapseAll() {
+    document.querySelectorAll('.file-item').forEach(el => el.open = false);
+  }
+
+  // Dark Mode toggle
+  function toggleDarkMode() {
+    const html = document.documentElement;
+    const isDark = html.getAttribute('data-theme') === 'dark';
+    html.setAttribute('data-theme', isDark ? 'light' : 'dark');
+    localStorage.setItem('theme', isDark ? 'light' : 'dark');
+    document.querySelectorAll('.dark-mode-btn').forEach(b => {
+      b.textContent = isDark ? '🌙 Dark Mode' : '☀️ Light Mode';
+    });
+  }
+  (function() {
+    const saved = localStorage.getItem('theme');
+    if (saved === 'dark') {
+      document.documentElement.setAttribute('data-theme', 'dark');
+      document.querySelectorAll('.dark-mode-btn').forEach(b => b.textContent = '☀️ Light Mode');
+    }
+  })();
 </script>
 {% endblock %}

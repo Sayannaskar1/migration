@@ -82,6 +82,19 @@
       </div>
     </div>
 
+    <!-- Target Cloud -->
+    <div class="card">
+      <h3>Target Cloud</h3>
+      <div class="form-group">
+        <label>Cloud Provider</label>
+        <select id="target_cloud" class="form-input">
+          <option value="aws" {% if project.target_cloud == 'aws' %}selected{% endif %}>Amazon Web Services (AWS)</option>
+          <option value="azure" {% if project.target_cloud == 'azure' %}selected{% endif %}>Microsoft Azure</option>
+          <option value="gcp" {% if project.target_cloud == 'gcp' %}selected{% endif %}>Google Cloud Platform (GCP)</option>
+        </select>
+      </div>
+    </div>
+
     <!-- Databricks Connection -->
     <div class="card">
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:1rem">
@@ -185,6 +198,7 @@
     fd.set('project_id', projectId);
     fd.set('name', {{ project.name | tojson }});
     fd.set('description', getVal('projectDescription'));
+    fd.set('target_cloud', getVal('target_cloud'));
     fd.set('sf_account', getVal('sf_account'));
     fd.set('sf_user', getVal('sf_user'));
     fd.set('sf_password', getVal('sf_password'));

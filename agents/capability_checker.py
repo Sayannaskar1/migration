@@ -123,7 +123,7 @@ FEATURE_CAPABILITY: dict[str, tuple[str, str]] = {
     ),
     "TO_VARCHAR": (
         Capability.SUPPORTED_WITH_REWRITE,
-        "TO_VARCHAR converted to CAST AS STRING by rule engine",
+        "TO_VARCHAR converted to format_number (numeric) or CAST AS STRING (non-numeric) by rule engine",
     ),
     "TO_NUMBER": (
         Capability.SUPPORTED_WITH_REWRITE,

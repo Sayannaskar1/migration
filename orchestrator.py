@@ -11,7 +11,7 @@ load_dotenv()
 
 from agents.project_loader import load_project, load_project_from_tree, ProjectInventory
 from agents.dependency_agent import analyze_dependencies, DependencyGraph
-from agents.schema_agent import convert_schema
+from agents.schema_agent import convert_schema, expand_file_format_refs
 from agents.sql_translation_agent import translate_inventory
 from agents.sqlglot_transpiler import transpile_all as sqlglot_transpile
 from agents.lakebridge_transpiler import (
@@ -48,6 +48,12 @@ from agents.manifest_agent import ManifestGenerator, MigrationManifest
 from agents.performance_optimizer import PerformanceOptimizer, OptimizationSuggestion
 from agents.semi_structured_agent import SemiStructuredAgent, SemiStructuredResult
 from agents.js_to_python_udf_agent import JSPythonUDFAgent, JSConversionResult
+from agents.platform.engine import PlatformMigrationEngine
+from agents.platform.strategy_base import StrategyAnalysis, StrategyPlan
+from agents.platform.mapping_catalog import PLATFORM_OBJECT_TYPES
+
+
+_PLATFORM_SKIP_TYPES = PLATFORM_OBJECT_TYPES | {"external_table", "iceberg_table", "grant", "user"}
 
 
 def preprocess_raw(sql: str) -> str:
@@ -93,6 +99,7 @@ class MigrationOrchestrator:
         "storage_discovery",
         "capability_check",
         "plan",
+        "platform_analysis",
         "sqlglot_transpile",
         "lakebridge_transpile",
         "rule_engine",
@@ -128,10 +135,13 @@ class MigrationOrchestrator:
         self.assessment_report: Optional[AssessmentReport] = None
         self.manifest: Optional[MigrationManifest] = None
         self.optimization_suggestions: list[OptimizationSuggestion] = []
+        self.platform_analyses: list[StrategyPlan] = []
+        self.platform_engine = PlatformMigrationEngine()
         self.step_timings: dict[str, float] = {}
         self.dry_run: bool = False
         self.target_version: str = ""
         self.catalog_strategy: str = "preserve"
+        self.target_cloud: str = "aws"
         self.catalog_merge_target: str = ""
         self.catalog_rename_map: dict[str, str] | None = None
         self.catalog_custom_mappings: list | None = None
@@ -301,12 +311,34 @@ class MigrationOrchestrator:
                     results.append(e)
         return results
 
+    def step_platform_analysis(self) -> list[StrategyPlan]:
+        """Run PlatformMigrationEngine to analyze and plan platform objects."""
+        if self.platform_analyses:
+            return self.platform_analyses
+        if not self.inventory:
+            raise RuntimeError("Project must be loaded first")
+        print("[5.5/14] Platform object analysis (strategy engine)...")
+        self.platform_analyses = self.platform_engine.analyze_and_plan(self.inventory)
+        by_status: dict[str, int] = {}
+        for plan in self.platform_analyses:
+            s = plan.analysis.status
+            by_status[s] = by_status.get(s, 0) + 1
+        if by_status:
+            parts = [f"{v} {k}" for k, v in sorted(by_status.items())]
+            print(f"  Platform objects: {', '.join(parts)}")
+        else:
+            print("  No platform objects found")
+        return self.platform_analyses
+
     def step_sqlglot_transpile(self) -> None:
         if not self.inventory:
             raise RuntimeError("Project must be loaded first")
         print("[6/14] SQLGlot transpilation (AST, with LakeBridge custom dialects)...")
+        _SKIP_TYPES = _PLATFORM_SKIP_TYPES
         count = 0
         for obj in self.inventory.all_objects:
+            if obj.object_type in _SKIP_TYPES:
+                continue
             if "LANGUAGE JAVASCRIPT" in obj.raw_sql.upper():
                 continue
             if obj.raw_sql:
@@ -324,9 +356,12 @@ class MigrationOrchestrator:
         if not morpheus_jar.exists():
             print("  Morpheus JAR not found, skipping")
             return
+        _SKIP_TYPES = _PLATFORM_SKIP_TYPES
         print("[7/14] Morpheus transpilation (LSP)...")
         count = 0
         for obj in self.inventory.all_objects:
+            if obj.object_type in _SKIP_TYPES:
+                continue
             if "LANGUAGE JAVASCRIPT" in obj.raw_sql.upper():
                 continue
             if obj.raw_sql:
@@ -383,8 +418,12 @@ class MigrationOrchestrator:
             raise RuntimeError("Project must be loaded first")
         print("[8/14] Regex cleanup & final checks...")
         for obj in self.inventory.all_objects:
-            obj.converted_sql = convert_schema(obj)
+            obj.converted_sql = convert_schema(obj, target_cloud=self.target_cloud)
         translate_inventory(self.inventory)
+        # Expand FILE_FORMAT=(FORMAT_NAME=...) references using registered file formats
+        for obj in self.inventory.all_objects:
+            if obj.converted_sql:
+                obj.converted_sql = expand_file_format_refs(obj.converted_sql)
         print(f"  Cleaned up {len(self.inventory.all_objects)} objects")
 
     def step_confidence_scoring(self) -> list[dict]:
@@ -675,6 +714,7 @@ class MigrationOrchestrator:
             "assessment_report": self.assessment_report,
             "manifest": self.manifest,
             "optimization_suggestions": self.optimization_suggestions,
+            "platform_analyses": self.platform_analyses,
             "step_timings": self.step_timings,
         }
 
@@ -686,6 +726,7 @@ class MigrationOrchestrator:
             "storage_discovery": self.step_storage_discovery,
             "capability_check": self.step_capability_check,
             "plan": self.step_plan,
+            "platform_analysis": self.step_platform_analysis,
             "sqlglot_transpile": self.step_sqlglot_transpile,
             "lakebridge_transpile": self.step_lakebridge_transpile,
             "rule_engine": self.step_rule_engine,

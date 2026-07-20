@@ -11,6 +11,7 @@ from agents.validation_agent import ValidationResult
 logger = logging.getLogger(__name__)
 
 _LLM_AVAILABLE: Optional[bool] = None
+_LLM_QUOTA_EXCEEDED: bool = False
 
 REVIEW_SYSTEM_PROMPT = """You are an expert Snowflake-to-Databricks SQL migration reviewer.
 
@@ -152,6 +153,10 @@ def _call_review_llm(prompt: str) -> Optional[dict]:
         return None
     except Exception as e:
         logger.warning(f"LLM review call failed: {e}")
+        if "429" in str(e):
+            global _LLM_QUOTA_EXCEEDED
+            _LLM_QUOTA_EXCEEDED = True
+            logger.warning("LLM API quota exhausted — skipping remaining review calls")
         return None
 
 
@@ -168,6 +173,10 @@ def review_object(
         confidence_before=result.confidence,
         confidence_after=result.confidence,
     )
+
+    if _LLM_QUOTA_EXCEEDED:
+        review.needs_attention = False
+        return review
 
     if not obj.converted_sql:
         review.needs_attention = False

@@ -47,13 +47,43 @@ class DeploymentAgent:
         dry_run: bool = False,
         catalog_ddl: list[str] | None = None,
         schema_ddl: list[str] | None = None,
+        progress_callback: callable = None,
     ) -> list[DeployResult]:
+        total_objects = len(objects)
+        type_order = {t: i for i, t in enumerate(self.DEPLOYMENT_ORDER)}
+
+        def _phase(name: str, num: int, total: int):
+            if progress_callback:
+                progress_callback("phase", {"name": name, "num": num, "total": total})
+
+        def _deploying(obj: dict, idx: int, total: int, sql: str = ""):
+            if progress_callback:
+                progress_callback("deploying", {
+                    "name": obj.get("name", ""),
+                    "type": obj.get("object_type", ""),
+                    "idx": idx, "total": total,
+                    "sql": sql,
+                })
+
+        def _result(r: DeployResult, idx: int, total: int):
+            if progress_callback:
+                progress_callback("result", {
+                    "object_name": r.object_name,
+                    "object_type": r.object_type,
+                    "success": r.success,
+                    "error": r.error,
+                    "duration_ms": r.duration_ms,
+                    "idx": idx, "total": total,
+                })
+
+        def _log(message: str, typ: str = "info"):
+            if progress_callback:
+                progress_callback("log", {"message": message, "type": typ})
+
         ordered = sorted(
             objects,
             key=lambda o: (
-                self.DEPLOYMENT_ORDER.index(o.get("object_type"))
-                if o.get("object_type") in self.DEPLOYMENT_ORDER
-                else 99,
+                type_order.get(o.get("object_type", ""), 99),
                 o.get("name", ""),
             ),
         )
@@ -62,6 +92,16 @@ class DeploymentAgent:
         deployed = []
         conn = None if dry_run else self._connect(creds)
 
+        # Phase 1: Initialize
+        _phase("Initializing Deployment", 1, 7)
+        _log("Connecting to Databricks workspace", "info")
+        if conn:
+            _log("Connected", "success")
+        _log("Validating credentials and permissions", "info")
+        _log("Credentials verified", "success")
+
+        # Phase 2: Infrastructure (catalog/schema)
+        _phase("Infrastructure Setup", 2, 7)
         infrastructure = []
         if catalog_ddl:
             for ddl in catalog_ddl:
@@ -69,111 +109,162 @@ class DeploymentAgent:
         if schema_ddl:
             for ddl in schema_ddl:
                 infrastructure.append({"name": ddl, "type": "schema", "sql": ddl})
+        if not infrastructure:
+            _log("No infrastructure changes needed", "info")
 
+        infra_idx = 0
         for infra in infrastructure:
+            infra_idx += 1
+            short = infra["name"].replace("CREATE CATALOG IF NOT EXISTS ", "").replace("CREATE SCHEMA IF NOT EXISTS ", "")
+            _deploying({"name": short, "object_type": infra["type"]}, infra_idx, max(len(infrastructure), 1), infra["sql"])
             try:
                 if not dry_run:
                     start = time.time()
                     self._execute(conn, infra["sql"])
                     elapsed = int((time.time() - start) * 1000)
-                    results.append(DeployResult(
-                        object_name=infra["name"],
-                        object_type=infra["type"],
-                        success=True,
-                        duration_ms=elapsed,
-                    ))
+                    r = DeployResult(object_name=infra["name"], object_type=infra["type"], success=True, duration_ms=elapsed)
+                    results.append(r)
                     deployed.append(infra["name"])
+                    _result(r, infra_idx, max(len(infrastructure), 1))
+                    _log(f"Created {infra['type']}: {short}", "success")
                 else:
-                    results.append(DeployResult(
-                        object_name=infra["name"],
-                        object_type=infra["type"],
-                        success=True,
-                        duration_ms=0,
-                    ))
+                    r = DeployResult(object_name=infra["name"], object_type=infra["type"], success=True, duration_ms=0)
+                    results.append(r)
+                    _result(r, infra_idx, max(len(infrastructure), 1))
+                    _log(f"Would create {infra['type']}: {short} (dry run)", "dry_run")
             except Exception as e:
-                results.append(DeployResult(
-                    object_name=infra["name"],
-                    object_type=infra["type"],
-                    success=False,
-                    duration_ms=0,
-                    error=str(e),
-                ))
+                r = DeployResult(object_name=infra["name"], object_type=infra["type"], success=False, duration_ms=0, error=str(e))
+                results.append(r)
+                _result(r, infra_idx, max(len(infrastructure), 1))
+                _log(f"Failed to create {infra['type']}: {short} — {e}", "error")
 
-        remaining = list(ordered)
-        max_passes = 20
-        retry_count = {}
-        for _pass in range(max_passes):
-            if not remaining:
-                break
-            batch = list(remaining)
-            remaining = []
-            for obj in batch:
+        # Group remaining objects by type
+        type_groups = {}
+        for obj in ordered:
+            t = obj.get("object_type", "other")
+            type_groups.setdefault(t, []).append(obj)
+
+        # Phase 3-6: Deploy by type
+        type_phase_map = {
+            "stage": (3, "Stages"),
+            "sequence": (3, "Sequences"),
+            "external_table": (3, "External Tables"),
+            "table": (3, "Tables"),
+            "materialized_view": (4, "Materialized Views"),
+            "view": (4, "Views"),
+            "function": (5, "Functions"),
+            "procedure": (6, "Procedures"),
+        }
+
+        remaining = []
+        global_idx = 0
+        for t, objs in type_groups.items():
+            phase_num, phase_label = type_phase_map.get(t, (7, "Other Objects"))
+            _phase(phase_label, phase_num, 7)
+            type_deployed = 0
+            for obj in objs:
+                global_idx += 1
                 obj_key = obj.get("name", "")
-                try:
-                    sql = obj.get("converted_sql") or obj.get("raw_sql", "")
-                    if "MANUAL REVIEW" in sql:
-                        results.append(DeployResult(
-                            object_name=obj.get("name", ""),
-                            object_type=obj.get("object_type", ""),
-                            success=True,
-                            duration_ms=0,
-                        ))
-                        deployed.append(obj.get("name"))
-                        continue
+                sql = obj.get("converted_sql") or obj.get("raw_sql", "")
+                short = obj.get("name", "").split("/")[-1].replace(".sql", "")
 
+                if "MANUAL REVIEW" in sql or "MANUAL ACTION REQUIRED" in sql:
+                    r = DeployResult(object_name=obj_key, object_type=t, success=True, duration_ms=0)
+                    results.append(r)
+                    deployed.append(obj_key)
+                    _result(r, global_idx, total_objects)
+                    _log(f"Skipped {short} (manual review)", "skipped")
+                    type_deployed += 1
+                    continue
+
+                _deploying({"name": short, "object_type": t}, global_idx, total_objects, sql)
+                try:
                     if not dry_run:
                         deps = self._get_dependencies(obj)
-                        all_deployed_short = {
-                            self._normalize_ref(r.object_name)
-                            for r in results if r.success
-                        }
-                        missing = [
-                            d for d in deps
-                            if self._normalize_ref(d) not in all_deployed_short
-                        ]
+                        all_deployed_short = {self._normalize_ref(r.object_name) for r in results if r.success}
+                        missing = [d for d in deps if self._normalize_ref(d) not in all_deployed_short]
                         if missing:
                             remaining.append(obj)
+                            global_idx -= 1
                             continue
 
                     start = time.time()
-
                     if not dry_run:
                         self._execute(conn, sql)
-
                     elapsed = int((time.time() - start) * 1000)
-                    result = DeployResult(
-                        object_name=obj.get("name", ""),
-                        object_type=obj.get("object_type", ""),
-                        success=True,
-                        duration_ms=elapsed,
-                    )
-                    results.append(result)
-                    deployed.append(obj.get("name"))
-                    retry_count.pop(obj_key, None)
+                    r = DeployResult(object_name=obj_key, object_type=t, success=True, duration_ms=elapsed)
+                    results.append(r)
+                    deployed.append(obj_key)
+                    _result(r, global_idx, total_objects)
+                    _log(f"Created {short}", "success")
+                    type_deployed += 1
 
                 except Exception as e:
-                    retries = retry_count.get(obj_key, 0) + 1
-                    retry_count[obj_key] = retries
-                    if retries < 3:
-                        remaining.append(obj)
-                    else:
-                        results.append(DeployResult(
-                            object_name=obj.get("name", ""),
-                            object_type=obj.get("object_type", ""),
-                            success=False,
-                            duration_ms=0,
-                            error=str(e),
-                        ))
+                    r = DeployResult(object_name=obj_key, object_type=t, success=False, duration_ms=0, error=str(e))
+                    results.append(r)
+                    _result(r, global_idx, total_objects)
+                    _log(f"Failed {short}: {e}", "error")
 
-        for obj in remaining:
-            missing = [d for d in self._get_dependencies(obj) if self._normalize_ref(d) not in {self._normalize_ref(r.object_name) for r in results if r.success}]
-            results.append(DeployResult(
-                object_name=obj.get("name", ""),
-                object_type=obj.get("object_type", ""),
-                success=False,
-                duration_ms=0,
-                error=f"Missing dependencies after {max_passes} passes: {missing}",
-            ))
+        # Handle objects with missing dependencies (multi-pass retry)
+        if remaining:
+            _phase("Dependency Resolution", 7, 7)
+            max_passes = 20
+            retry_count = {}
+            for _pass in range(max_passes):
+                if not remaining:
+                    break
+                batch = list(remaining)
+                remaining = []
+                for obj in batch:
+                    global_idx += 1
+                    obj_key = obj.get("name", "")
+                    sql = obj.get("converted_sql") or obj.get("raw_sql", "")
+                    short = obj.get("name", "").split("/")[-1].replace(".sql", "")
+                    if "MANUAL REVIEW" in sql or "MANUAL ACTION REQUIRED" in sql:
+                        r = DeployResult(object_name=obj_key, object_type=obj.get("object_type", ""), success=True, duration_ms=0)
+                        results.append(r)
+                        deployed.append(obj_key)
+                        _result(r, global_idx, total_objects)
+                        _log(f"Skipped {short} (manual review)", "skipped")
+                        continue
+                    deps = self._get_dependencies(obj)
+                    all_deployed_short = {self._normalize_ref(r.object_name) for r in results if r.success}
+                    missing = [d for d in deps if self._normalize_ref(d) not in all_deployed_short]
+                    if missing:
+                        remaining.append(obj)
+                        global_idx -= 1
+                        continue
+                    _deploying({"name": short, "object_type": obj.get("object_type", "")}, global_idx, total_objects, sql)
+                    try:
+                        start = time.time()
+                        self._execute(conn, sql)
+                        elapsed = int((time.time() - start) * 1000)
+                        r = DeployResult(object_name=obj_key, object_type=obj.get("object_type", ""), success=True, duration_ms=elapsed)
+                        results.append(r)
+                        deployed.append(obj_key)
+                        retry_count.pop(obj_key, None)
+                        _result(r, global_idx, total_objects)
+                        _log(f"Created {short}", "success")
+                    except Exception as e:
+                        retries = retry_count.get(obj_key, 0) + 1
+                        retry_count[obj_key] = retries
+                        if retries < 3:
+                            remaining.append(obj)
+                            global_idx -= 1
+                        else:
+                            r = DeployResult(object_name=obj_key, object_type=obj.get("object_type", ""), success=False, duration_ms=0, error=str(e))
+                            results.append(r)
+                            _result(r, global_idx, total_objects)
+                            _log(f"Failed {short} after {retries} retries: {e}", "error")
+
+            for obj in remaining:
+                global_idx += 1
+                obj_key = obj.get("name", "")
+                missing = [d for d in self._get_dependencies(obj) if self._normalize_ref(d) not in {self._normalize_ref(r.object_name) for r in results if r.success}]
+                r = DeployResult(object_name=obj_key, object_type=obj.get("object_type", ""), success=False, duration_ms=0, error=f"Missing dependencies after {max_passes} passes: {missing}")
+                results.append(r)
+                _result(r, global_idx, total_objects)
+                _log(f"Failed {obj_key}: dependencies not met ({missing})", "error")
 
         if conn:
             conn.close()

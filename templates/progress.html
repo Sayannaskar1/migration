@@ -1,197 +1,437 @@
 {% extends "base.html" %}
 {% block title %}Running Migration…{% endblock %}
 {% block page_icon %}{% endblock %}
-{% block page_title %}Migration <span class="arrow">/</span> In Progress{% endblock %}
+{% block page_title %}Migration Pipeline{% endblock %}
 {% set active_page = "results" %}
 
 {% block content %}
-<div class="card" style="text-align:center;padding:3rem 2rem">
-  <div style="width:48px;height:48px;border-radius:50%;border:3px solid var(--card-border);border-top-color:var(--accent);margin:0 auto 1.5rem;animation:spin 1s linear infinite" id="statusIcon"></div>
-  <h3 id="statusTitle" style="font-size:1.2rem;margin-bottom:.5rem">Starting migration…</h3>
-  <p id="statusMessage" style="color:var(--text-secondary);font-size:.9rem;margin-bottom:2rem;max-width:400px;margin-left:auto;margin-right:auto">Preparing Snowflake extractor</p>
+<style>
+  .mp-top{display:flex;align-items:center;gap:1.25rem;padding:1rem 1.25rem;background:var(--card-bg);border:1px solid var(--card-border);border-radius:var(--radius-md);margin-bottom:1rem;flex-wrap:wrap}
+  .mp-top-bar{flex:1;min-width:200px}
+  .mp-top-bar .mp-label{font-size:.65rem;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);margin-bottom:4px}
+  .mp-top-bar .mp-value{font-size:1.05rem;font-weight:700;color:var(--text)}
+  .mp-top-progress{flex:2;min-width:250px}
+  .mp-top-progress .mp-bar{width:100%;height:8px;background:var(--bg);border-radius:4px;overflow:hidden;margin-top:4px}
+  .mp-top-progress .mp-bar-fill{height:100%;background:linear-gradient(90deg,var(--accent),#6366f1);border-radius:4px;transition:width .5s ease}
+  .mp-top-progress .mp-bar-text{display:flex;justify-content:space-between;font-size:.72rem;color:var(--text-muted);margin-top:2px}
 
-  <!-- Progress bar -->
-  <div style="max-width:500px;margin:0 auto 2rem">
-    <div style="display:flex;justify-content:space-between;margin-bottom:.4rem">
-      <span class="text-muted text-sm" id="stepLabel">Step 0 of 9</span>
-      <span class="text-muted text-sm" id="stepPct">0%</span>
+  .mp-grid{display:grid;grid-template-columns:300px 1fr 280px;grid-template-rows:1fr auto;gap:1rem;min-height:calc(100vh - 240px)}
+  .mp-grid > *{background:var(--card-bg);border:1px solid var(--card-border);border-radius:var(--radius-md);overflow:hidden}
+
+  .mp-phases{grid-column:1;grid-row:1;padding:0;display:flex;flex-direction:column}
+  .mp-center{grid-column:2;grid-row:1;padding:1.25rem;display:flex;flex-direction:column;gap:1rem}
+  .mp-live{grid-column:3;grid-row:1;padding:1rem;display:flex;flex-direction:column}
+  .mp-log{grid-column:1 / -1;grid-row:2;padding:0;max-height:220px;overflow:hidden;display:flex;flex-direction:column}
+
+  .mp-section-header{font-size:.65rem;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--text-muted);padding:.6rem 1rem;border-bottom:1px solid var(--card-border);flex-shrink:0}
+
+  /* ── Phase timeline ── */
+  .mp-phase-list{flex:1;overflow-y:auto;padding:.5rem 0}
+  .mp-phase-row{display:flex;align-items:stretch;padding:0 1rem;position:relative}
+  .mp-phase-col-line{display:flex;flex-direction:column;align-items:center;width:20px;flex-shrink:0;padding:4px 0}
+  .mp-phase-dot{width:14px;height:14px;border-radius:50%;flex-shrink:0;z-index:1;display:flex;align-items:center;justify-content:center;font-size:7px;color:#fff;font-weight:700;transition:all .3s}
+  .mp-phase-dot.waiting{background:var(--text-muted);opacity:.25}
+  .mp-phase-dot.running{background:var(--accent);box-shadow:0 0 0 4px rgba(99,102,241,.2);animation:mp-pulse 1.5s ease-in-out infinite;width:16px;height:16px}
+  .mp-phase-dot.completed{background:var(--success)}
+  .mp-phase-dot.failed{background:var(--error)}
+  .mp-phase-dot.skipped{background:var(--text-muted);opacity:.25}
+  .mp-phase-line{width:2px;flex:1;min-height:12px}
+  .mp-phase-line.waiting{background:var(--text-muted);opacity:.1}
+  .mp-phase-line.completed{background:var(--success)}
+  .mp-phase-line.running{background:linear-gradient(180deg,var(--success) 0%,var(--accent) 100%)}
+
+  @keyframes mp-pulse{0%,100%{box-shadow:0 0 0 4px rgba(99,102,241,.2)}50%{box-shadow:0 0 0 8px rgba(99,102,241,.1)}}
+
+  .mp-phase-body{flex:1;padding:6px 8px 6px 10px;cursor:pointer;border-radius:4px;transition:background .15s}
+  .mp-phase-body:hover{background:var(--bg)}
+  .mp-phase-body .mp-phase-name{font-size:.8rem;font-weight:500;color:var(--text);transition:color .2s}
+  .mp-phase-body .mp-phase-agent{font-size:.6rem;color:var(--text-muted);margin-top:1px}
+  .mp-phase-body.waiting .mp-phase-name{color:var(--text-muted)}
+  .mp-phase-body.running .mp-phase-name{color:var(--accent)}
+  .mp-phase-body.completed .mp-phase-name{color:var(--success)}
+  .mp-phase-body.failed .mp-phase-name{color:var(--error)}
+
+  .mp-phase-tasks{margin-top:4px;padding-left:6px;border-left:2px solid var(--card-border);max-height:0;overflow:hidden;transition:max-height .2s ease}
+  .mp-phase-body.running .mp-phase-tasks,.mp-phase-body.completed .mp-phase-tasks{max-height:400px}
+  .mp-phase-task{font-size:.68rem;padding:2px 0 2px 4px;color:var(--text-muted);display:flex;align-items:center;gap:4px}
+  .mp-phase-task.completed{color:var(--success)}
+  .mp-phase-task.running{color:var(--accent);font-weight:500}
+
+  /* ── Center panel ── */
+  .mp-current-header{display:flex;align-items:center;gap:.75rem;padding-bottom:.75rem;border-bottom:1px solid var(--card-border)}
+  .mp-current-icon{width:32px;height:32px;border-radius:8px;display:flex;align-items:center;justify-content:center;font-size:16px;font-weight:700;flex-shrink:0}
+  .mp-current-icon.running{background:rgba(99,102,241,.12);color:var(--accent);animation:mp-pulse 1.5s ease-in-out infinite}
+  .mp-current-icon.completed{background:rgba(34,197,94,.12);color:#22c55e}
+  .mp-current-icon.failed{background:rgba(239,68,68,.12);color:#ef4444}
+  .mp-current-icon.waiting{background:var(--bg);color:var(--text-muted)}
+
+  .mp-info-cards{display:grid;grid-template-columns:1fr 1fr;gap:.6rem}
+  .mp-card{background:var(--bg);border-radius:var(--radius-sm);padding:.7rem .85rem}
+  .mp-card-label{font-size:.62rem;text-transform:uppercase;letter-spacing:.04em;color:var(--text-muted);margin-bottom:3px}
+  .mp-card-value{font-size:.85rem;font-weight:600;color:var(--text)}
+
+  .mp-task-list{display:flex;flex-direction:column;gap:2px;max-height:180px;overflow-y:auto;margin-top:4px}
+  .mp-task-item{display:flex;align-items:center;gap:6px;padding:3px 6px;border-radius:3px;font-size:.73rem;color:var(--text-muted)}
+  .mp-task-item.completed{color:var(--success)}
+  .mp-task-item.running{color:var(--accent);font-weight:500;background:rgba(99,102,241,.04)}
+  .mp-task-item.failed{color:var(--error)}
+  .mp-task-dot2{width:6px;height:6px;border-radius:50%;flex-shrink:0}
+  .mp-task-dot2.completed{background:var(--success)}
+  .mp-task-dot2.running{background:var(--accent);animation:mp-pulse 1s ease-in-out infinite}
+  .mp-task-dot2.waiting{background:var(--text-muted);opacity:.2}
+
+  .mp-live-feed{flex:1;overflow-y:auto;font-size:.72rem;font-family:var(--mono);line-height:1.6;padding:0}
+  .mp-live-feed .evt{display:flex;gap:6px;padding:2px 0;border-bottom:1px solid rgba(255,255,255,.03)}
+  .mp-live-feed .evt-time{color:var(--text-muted);flex-shrink:0}
+  .mp-live-feed .evt-info{color:#94a3b8}
+  .mp-live-feed .evt-success{color:#22c55e}
+  .mp-live-feed .evt-error{color:#ef4444}
+  .mp-live-feed .evt-warning{color:#f59e0b}
+
+  .mp-log-inner{flex:1;overflow-y:auto;font-size:.72rem;font-family:var(--mono);background:#0c1222;color:#e2e8f0;padding:.5rem .75rem;line-height:1.6}
+  .mp-log-inner .lg{display:flex;gap:6px}
+  .mp-log-inner .lg-time{color:#64748b;flex-shrink:0}
+  .mp-log-inner .lg-info{color:#e2e8f0}
+  .mp-log-inner .lg-success{color:#22c55e}
+  .mp-log-inner .lg-error{color:#ef4444}
+  .mp-log-inner .lg-warning{color:#f59e0b}
+
+  .mp-log-toolbar{display:flex;align-items:center;gap:.5rem;padding:.4rem .75rem;border-bottom:1px solid var(--card-border);font-size:.7rem;font-weight:600;color:var(--text-muted);flex-shrink:0}
+
+  .mp-btn-cancel{display:inline-flex;align-items:center;gap:4px;padding:6px 14px;border-radius:var(--radius-sm);font-size:.75rem;font-weight:600;border:1px solid var(--error);color:var(--error);background:transparent;cursor:pointer;transition:all .15s}
+  .mp-btn-cancel:hover{background:rgba(239,68,68,.08)}
+
+  .mp-badge{display:inline-flex;align-items:center;gap:3px;padding:2px 8px;border-radius:99px;font-size:.6rem;font-weight:600}
+  .mp-badge.agent{background:rgba(99,102,241,.1);color:var(--accent)}
+  .mp-badge.done{background:rgba(34,197,94,.1);color:#22c55e}
+
+  @media(max-width:1024px){
+    .mp-grid{grid-template-columns:1fr;grid-template-rows:auto auto auto auto}
+    .mp-phases{grid-column:1;grid-row:2}
+    .mp-center{grid-column:1;grid-row:3}
+    .mp-live{grid-column:1;grid-row:4}
+    .mp-log{grid-column:1;grid-row:5}
+  }
+</style>
+
+<!-- ── TOP: Overview Bar ── -->
+<div class="mp-top">
+  <div class="mp-top-bar">
+    <div class="mp-label">Pipeline Status</div>
+    <div class="mp-value" id="topStatus">Starting…</div>
+  </div>
+  <div class="mp-top-progress">
+    <div style="display:flex;justify-content:space-between;font-size:.72rem">
+      <span id="topPhaseLabel">Phase 0 of 9</span>
+      <span id="topPct" style="font-weight:600">0%</span>
     </div>
-    <div style="width:100%;height:6px;background:var(--bg);border-radius:3px;overflow:hidden">
-      <div id="progressBar" style="width:0%;height:100%;background:linear-gradient(90deg,var(--accent),#6366f1);border-radius:3px;transition:width .4s ease"></div>
+    <div class="mp-bar"><div class="mp-bar-fill" id="topBar" style="width:0%"></div></div>
+    <div class="mp-bar-text">
+      <span id="topDetail">Waiting to start…</span>
+      <span id="topElapsed">00:00</span>
     </div>
   </div>
-
-  <!-- Step list -->
-  <div style="max-width:380px;margin:0 auto;text-align:left">
-    <div class="step-row" data-step="1" style="display:flex;align-items:center;gap:.6rem;padding:.35rem 0;color:var(--text-muted)">
-      <span class="step-indicator" style="width:20px;text-align:center;font-size:.85rem">○</span>
-      <span style="font-size:.82rem">Connect to Snowflake</span>
-    </div>
-    <div class="step-row" data-step="2" style="display:flex;align-items:center;gap:.6rem;padding:.35rem 0;color:var(--text-muted)">
-      <span class="step-indicator" style="width:20px;text-align:center;font-size:.85rem">○</span>
-      <span style="font-size:.82rem">Extract DDL</span>
-    </div>
-    <div class="step-row" data-step="3" style="display:flex;align-items:center;gap:.6rem;padding:.35rem 0;color:var(--text-muted)">
-      <span class="step-indicator" style="width:20px;text-align:center;font-size:.85rem">○</span>
-      <span style="font-size:.82rem">Load &amp; analyze dependencies</span>
-    </div>
-    <div class="step-row" data-step="4" style="display:flex;align-items:center;gap:.6rem;padding:.35rem 0;color:var(--text-muted)">
-      <span class="step-indicator" style="width:20px;text-align:center;font-size:.85rem">○</span>
-      <span style="font-size:.82rem">Analyze capabilities</span>
-    </div>
-    <div class="step-row" data-step="5" style="display:flex;align-items:center;gap:.6rem;padding:.35rem 0;color:var(--text-muted)">
-      <span class="step-indicator" style="width:20px;text-align:center;font-size:.85rem">○</span>
-      <span style="font-size:.82rem">Convert schemas &amp; translate SQL</span>
-    </div>
-    <div class="step-row" data-step="6" style="display:flex;align-items:center;gap:.6rem;padding:.35rem 0;color:var(--text-muted)">
-      <span class="step-indicator" style="width:20px;text-align:center;font-size:.85rem">○</span>
-      <span style="font-size:.82rem">LLM verification &amp; validation</span>
-    </div>
-    <div class="step-row" data-step="7" style="display:flex;align-items:center;gap:.6rem;padding:.35rem 0;color:var(--text-muted)">
-      <span class="step-indicator" style="width:20px;text-align:center;font-size:.85rem">○</span>
-      <span style="font-size:.82rem">Self-healing &amp; review</span>
-    </div>
-    <div class="step-row" data-step="8" style="display:flex;align-items:center;gap:.6rem;padding:.35rem 0;color:var(--text-muted)">
-      <span class="step-indicator" style="width:20px;text-align:center;font-size:.85rem">○</span>
-      <span style="font-size:.82rem">Validate conversions</span>
-    </div>
-    <div class="step-row" data-step="9" style="display:flex;align-items:center;gap:.6rem;padding:.35rem 0;color:var(--text-muted)">
-      <span class="step-indicator" style="width:20px;text-align:center;font-size:.85rem">○</span>
-      <span style="font-size:.82rem">Generate report</span>
-    </div>
-  </div>
-
-  <div style="margin-top:1.5rem;display:flex;gap:.75rem;justify-content:center">
-    <button class="btn btn-ghost" id="cancelBtn" onclick="cancelMigration()">✕ Cancel Migration</button>
-  </div>
-
-  <div id="errorBox" class="hidden" style="margin-top:1.5rem;padding:1rem;background:var(--error-light);border-radius:var(--radius-sm);text-align:left">
-    <p style="font-size:.82rem;color:var(--error);font-weight:600;margin-bottom:.25rem" id="errorTitle">Migration Failed</p>
-    <pre id="errorText" style="font-size:.75rem;color:var(--error);background:transparent;white-space:pre-wrap;overflow-x:auto"></pre>
-    <a href="/" class="btn btn-outline btn-sm mt-1">← Back to Dashboard</a>
+  <div style="display:flex;gap:6px;flex-wrap:wrap">
+    <span class="mp-badge agent" id="topAgent">—</span>
+    <button class="mp-btn-cancel" id="cancelBtn" onclick="cancelMigration()" style="display:inline-flex">Cancel</button>
   </div>
 </div>
 
-<script>
-  const runId = '{{ run_id }}';
-  let pollCount = 0;
-  let failCount = 0;
-  let cancelRequested = false;
+<!-- ── 4-Panel Grid ── -->
+<div class="mp-grid" id="mpGrid">
 
-  function setStatus(state) {
-    const el = document.getElementById('statusIcon');
-    el.className = '';
-    if (state === 'running') el.style.animation = 'spin 1s linear infinite';
-    else if (state === 'done') { el.style.animation = 'none'; el.style.borderColor = 'var(--success)'; }
-    else if (state === 'error') { el.style.animation = 'none'; el.style.borderColor = 'var(--error)'; }
-    else if (state === 'cancelled') { el.style.animation = 'none'; el.style.borderColor = 'var(--text-muted)'; }
+  <!-- LEFT: Pipeline Timeline -->
+  <div class="mp-phases">
+    <div class="mp-section-header">Pipeline Timeline</div>
+    <div class="mp-phase-list" id="phasesContainer"></div>
+  </div>
+
+  <!-- CENTER: Current Phase Details -->
+  <div class="mp-center" id="mpCenter">
+    <div class="mp-current-header" id="currentHeader">
+      <div class="mp-current-icon running" id="currentIcon">&#9679;</div>
+      <div style="flex:1">
+        <div style="font-size:.85rem;font-weight:700" id="pdName">Starting…</div>
+        <div style="font-size:.68rem;color:var(--text-muted)" id="pdSubtitle">Preparing migration pipeline</div>
+      </div>
+    </div>
+    <div class="mp-info-cards" id="pdStats"></div>
+    <div style="flex:1;min-height:0">
+      <div style="font-size:.68rem;font-weight:600;color:var(--text-muted);margin-bottom:4px">
+        Tasks <span id="taskCount" style="font-weight:400"></span>
+      </div>
+      <div class="mp-task-list" id="pdTasks"></div>
+    </div>
+  </div>
+
+  <!-- RIGHT: Live Activity -->
+  <div class="mp-live">
+    <div class="mp-section-header" style="border-bottom:0;padding:.6rem 1rem .4rem">Recent Activity</div>
+    <div class="mp-live-feed" id="activityFeed">
+      <div style="color:var(--text-muted);font-size:.72rem;padding:.5rem 1rem">Waiting for activity…</div>
+    </div>
+  </div>
+
+  <!-- BOTTOM: Execution Log -->
+  <div class="mp-log">
+    <div class="mp-log-toolbar">
+      <span style="flex:1;display:flex;align-items:center;gap:6px">
+        Execution Log
+        <span id="logCount" style="font-weight:400;color:var(--text-muted);font-size:.65rem">0 events</span>
+      </span>
+      <button class="btn btn-ghost" id="logPauseBtn" onclick="toggleLogPause()" style="font-size:.62rem;padding:2px 6px">Pause</button>
+      <button class="btn btn-ghost" onclick="downloadLog()" style="font-size:.62rem;padding:2px 6px">Download</button>
+    </div>
+    <div class="mp-log-inner" id="logContainer"><div style="color:#64748b">No events yet…</div></div>
+  </div>
+
+</div>
+
+<!-- Error / Cancelled overlays -->
+<div id="errorBox" class="hidden" style="margin-top:1rem;padding:1rem 1.25rem;background:var(--error-light);border-radius:var(--radius-sm)">
+  <div style="display:flex;align-items:center;gap:.75rem">
+    <div style="width:36px;height:36px;border-radius:8px;background:rgba(239,68,68,.12);display:flex;align-items:center;justify-content:center;font-size:1.1rem;flex-shrink:0">&#10005;</div>
+    <div style="flex:1">
+      <div style="font-weight:700;color:var(--error);font-size:.9rem" id="errorTitle">Migration Failed</div>
+      <pre id="errorText" style="font-size:.75rem;color:var(--error);background:transparent;white-space:pre-wrap;margin-top:4px;font-family:var(--mono)"></pre>
+    </div>
+  </div>
+  <div style="margin-top:.75rem;display:flex;gap:.5rem">
+    <a href="/" class="btn btn-outline btn-sm">Back to Dashboard</a>
+    <button class="btn btn-outline btn-sm" onclick="retryMigration()">Retry Migration</button>
+  </div>
+</div>
+
+<div id="cancelBox" class="hidden" style="margin-top:1rem;padding:1rem;background:var(--bg);border-radius:var(--radius-sm);text-align:center">
+  <div style="font-size:.9rem;color:var(--text-muted);margin-bottom:6px">Migration Cancelled</div>
+  <a href="/" class="btn btn-outline btn-sm">Back to Dashboard</a>
+</div>
+
+<script>
+  const RUN_ID = '{{ run_id }}';
+  let logPaused = false, logAutoScroll = true, lastLogLen = 0, cancelSent = false, completed = false;
+
+  /* ── Render pipeline timeline ── */
+  function renderPhases(phases) {
+    const c = document.getElementById('phasesContainer');
+    if(!phases || phases.length === 0){
+      c.innerHTML = '<div style="color:var(--text-muted);font-size:.75rem;padding:1rem;text-align:center">No phase data</div>';
+      return;
+    }
+    let html = '';
+    for(let pi=0; pi<phases.length; pi++){
+      const p = phases[pi];
+      const isLast = pi === phases.length - 1;
+      const dotIcon = p.status === 'completed' ? '&#10003;' : p.status === 'running' ? '' : p.status === 'failed' ? '&#10005;' : '';
+      const bodyCls = 'mp-phase-body ' + p.status;
+      let tasksHtml = '';
+      if(p.tasks && p.tasks.length){
+        tasksHtml = '<div class="mp-phase-tasks">' + p.tasks.map(function(t){
+          const tc = 'mp-phase-task ' + t.status;
+          const icon = t.status === 'completed' ? '&#10003;' : t.status === 'running' ? '&#9679;' : '&#9675;';
+          return '<div class="'+tc+'">'+icon+' '+t.name+'</div>';
+        }).join('') + '</div>';
+      }
+      html += '<div class="mp-phase-row">' +
+        '<div class="mp-phase-col-line">' +
+          '<div class="mp-phase-dot '+p.status+'">'+dotIcon+'</div>' +
+          (isLast ? '' : '<div class="mp-phase-line '+p.status+'"></div>') +
+        '</div>' +
+        '<div class="'+bodyCls+'">' +
+          '<div class="mp-phase-name">' + p.name + '</div>' +
+          '<div class="mp-phase-agent">' + (p.agent || '') + '</div>' +
+          tasksHtml +
+        '</div>' +
+      '</div>';
+    }
+    c.innerHTML = html;
   }
 
+  /* ── Render center panel ── */
+  function renderPhaseDetail(prog, phases) {
+    const pi = prog.phase || 0;
+    const phase = phases && phases[pi] ? phases[pi] : {name:'Starting…', agent:'', tasks:[]};
+
+    // Header
+    document.getElementById('pdName').textContent = phase.name;
+    document.getElementById('pdSubtitle').textContent =
+      prog.done ? 'All phases complete' :
+      prog.error ? 'Phase failed' :
+      phase.agent ? 'Running on ' + phase.agent : 'Processing…';
+
+    const iconEl = document.getElementById('currentIcon');
+    iconEl.className = 'mp-current-icon ' + (prog.done ? 'completed' : prog.error ? 'failed' : 'running');
+    iconEl.innerHTML = prog.done ? '&#10003;' : prog.error ? '&#10005;' : '&#9679;';
+
+    // Stats cards
+    const stats = [];
+    const donePhases = phases.filter(function(p){return p.status === 'completed'}).length;
+    stats.push({label:'Progress', val: donePhases + ' / ' + phases.length + ' phases'});
+    if(prog.elapsed !== undefined){
+      const m = Math.floor((prog.elapsed || 0) / 60);
+      const s = (prog.elapsed || 0) % 60;
+      stats.push({label:'Elapsed', val: String(m).padStart(2,'0')+':'+String(s).padStart(2,'0')});
+    }
+    if(prog.current_object){
+      stats.push({label:'Current Object', val: prog.current_object});
+    }
+    if(prog.objects_total > 0){
+      stats.push({label:'Objects', val: prog.objects_completed + ' / ' + prog.objects_total});
+    }
+    document.getElementById('pdStats').innerHTML = stats.map(function(s){
+      return '<div class="mp-card"><div class="mp-card-label">'+s.label+'</div><div class="mp-card-value">'+s.val+'</div></div>';
+    }).join('');
+
+    // Tasks in current phase
+    if(phase.tasks){
+      const doneTasks = phase.tasks.filter(function(t){return t.status==='completed'}).length;
+      document.getElementById('taskCount').textContent = '(' + doneTasks + ' / ' + phase.tasks.length + ' done)';
+      document.getElementById('pdTasks').innerHTML = phase.tasks.map(function(t, ti){
+        const icon = t.status === 'completed' ? '&#10003;' : t.status === 'running' ? '&#9679;' : t.status === 'failed' ? '&#10005;' : '&#9675;';
+        const cls = 'mp-task-item ' + t.status;
+        const dotCls = 'mp-task-dot2 ' + t.status;
+        return '<div class="'+cls+'"><span class="'+dotCls+'"></span> '+icon+' '+t.name+'</div>';
+      }).join('');
+    }
+  }
+
+  /* ── Render activity / log ── */
+  function renderActivity(log) {
+    const feed = document.getElementById('activityFeed');
+    if(!log || log.length === 0){
+      feed.innerHTML = '<div style="color:var(--text-muted);font-size:.72rem;padding:.5rem 1rem">Waiting for activity…</div>';
+      return;
+    }
+    const recent = log.slice(-30);
+    feed.innerHTML = recent.map(function(e){
+      return '<div class="evt"><span class="evt-time">'+e.time+'</span><span class="evt-'+e.level+'">'+e.message+'</span></div>';
+    }).join('');
+    feed.scrollTop = feed.scrollHeight;
+  }
+
+  function renderLog(log) {
+    if(logPaused) return;
+    const c = document.getElementById('logContainer');
+    if(!log || log.length === 0){
+      c.innerHTML = '<div style="color:#64748b">No events yet…</div>';
+      return;
+    }
+    c.innerHTML = log.map(function(e){
+      return '<div class="lg"><span class="lg-time">'+e.time+'</span><span class="lg-'+e.level+'">'+e.message+'</span></div>';
+    }).join('');
+    document.getElementById('logCount').textContent = log.length + ' events';
+    if(logAutoScroll) c.scrollTop = c.scrollHeight;
+  }
+
+  /* ── Top bar ── */
+  function renderTop(prog, phases, done, error) {
+    const pi = prog.phase || 0;
+    const totalPhases = phases.length || 9;
+    const status = done ? (error ? 'Failed' : 'Complete') : 'Running';
+    document.getElementById('topStatus').textContent = status;
+    document.getElementById('topStatus').style.color = done ? (error ? 'var(--error)' : 'var(--success)') : 'var(--accent)';
+
+    const donePhases = phases.filter(function(p){return p.status === 'completed'}).length;
+    const pct = totalPhases > 0 ? Math.round(donePhases / totalPhases * 100) : 0;
+    document.getElementById('topBar').style.width = pct + '%';
+    document.getElementById('topPct').textContent = pct + '%';
+    document.getElementById('topPhaseLabel').textContent = 'Phase ' + donePhases + ' of ' + totalPhases;
+
+    const phase = phases[pi];
+    document.getElementById('topDetail').textContent = phase ? phase.name : (prog.detail || 'Working…');
+    if(prog.elapsed !== undefined){
+      const m = Math.floor((prog.elapsed || 0) / 60);
+      const s = (prog.elapsed || 0) % 60;
+      document.getElementById('topElapsed').textContent = String(m).padStart(2,'0')+':'+String(s).padStart(2,'0');
+    }
+    document.getElementById('topAgent').textContent = (phase && phase.agent) || '—';
+  }
+
+  /* ── Polling ── */
   function poll(){
-    fetch('/api/progress/'+runId).then(r=>r.json()).then(data=>{
-      // Cancel requested and still polling — show cancelling state
-      if(cancelRequested && !data.done){
-        setStatus('cancelled');
-        document.getElementById('statusTitle').textContent = 'Cancelling...';
-        document.getElementById('statusMessage').textContent = 'Waiting for current operation to stop...';
-        document.getElementById('cancelBtn').disabled=true;
-        document.getElementById('cancelBtn').textContent='Cancelling...';
+    fetch('/api/progress/'+RUN_ID).then(function(r){return r.json()}).then(function(data){
+      if(completed) return;
+      const cancel = data.cancel, error = data.error, done = data.done;
+      const prog = data.progress || {};
+      const phases = prog.phases || [];
+      const log = prog.log || [];
+
+      if(cancelSent && !done){
+        document.getElementById('cancelBox').classList.remove('hidden');
         setTimeout(poll, 1000);
         return;
       }
 
-      if(data.error && !data.progress){
-        showError(data.error);
-        return;
+      renderPhases(phases);
+      renderPhaseDetail(prog, phases);
+      renderTop(prog, phases, done, error);
+
+      if(log.length !== lastLogLen){
+        renderActivity(log);
+        lastLogLen = log.length;
       }
-      const p = data.progress || {};
-      const step = p.step || 0;
-      const total = p.total || 9;
-      const msg = p.message || 'Working...';
-      const done = data.done;
-      const error = data.error;
-
-      const pct = total > 0 ? Math.round(step / total * 100) : 0;
-      document.getElementById('progressBar').style.width = Math.min(pct, 100) + '%';
-      document.getElementById('stepLabel').textContent = 'Step ' + step + ' of ' + total;
-      document.getElementById('stepPct').textContent = pct + '%';
-      document.getElementById('statusMessage').textContent = msg;
-
-      if(step > 0){
-        setStatus('running');
-        document.getElementById('statusTitle').textContent = step < total ? msg : 'Migration Complete!';
-      }
-
-      // Update step indicators
-      document.querySelectorAll('.step-row').forEach(el => {
-        const s = parseInt(el.dataset.step);
-        const ind = el.querySelector('.step-indicator');
-        if(s < step){
-          ind.textContent = '✓'; el.style.color = 'var(--success)';
-        } else if(s === step){
-          ind.textContent = '◌'; el.style.color = 'var(--accent)';
-          el.style.fontWeight = '600';
-        }
-      });
+      renderLog(log);
 
       if(done){
-        if(cancelRequested || (error && error.includes('Cancelled'))){
-          setStatus('cancelled');
-          document.getElementById('statusTitle').textContent = 'Migration Cancelled';
-          document.getElementById('statusMessage').textContent = '';
-          document.getElementById('cancelBtn').style.display='none';
-          document.getElementById('errorBox').classList.remove('hidden');
-          document.getElementById('errorTitle').textContent = 'Migration Cancelled';
-          document.getElementById('errorText').textContent = error || 'Cancelled by user';
-          document.getElementById('errorBox').querySelector('.btn').textContent = '← Dashboard';
+        completed = true;
+        if(cancelSent || (error && error.indexOf('Cancelled') !== -1)){
+          document.getElementById('cancelBox').classList.remove('hidden');
           return;
         }
-        if(error){ showError(error); return; }
-        setStatus('done');
-        document.getElementById('statusTitle').textContent = 'Migration Complete!';
-        document.getElementById('statusMessage').textContent = 'Redirecting to results...';
-        setTimeout(() => { window.location.href = '/results/' + runId; }, 800);
+        if(error){
+          document.getElementById('errorBox').classList.remove('hidden');
+          document.getElementById('errorTitle').textContent = 'Migration Failed';
+          document.getElementById('errorText').textContent = error;
+          return;
+        }
+        setTimeout(function(){ window.location.href = '/results/' + RUN_ID; }, 1500);
         return;
       }
 
-      pollCount++;
-      failCount = 0;
-      setTimeout(poll, 1500);
-    }).catch(() => {
-      failCount++;
-      if(failCount < 30) setTimeout(poll, 2000);
-      else{
-        document.getElementById('statusMessage').textContent = 'Connection lost. Retrying...';
-        failCount = 0;
-        setTimeout(poll, 5000);
-      }
+      setTimeout(poll, 1200);
+    }).catch(function(){
+      if(!completed) setTimeout(poll, 2000);
+    });
+  }
+
+  /* ── Actions ── */
+  function toggleLogPause(){
+    logPaused = !logPaused;
+    document.getElementById('logPauseBtn').textContent = logPaused ? 'Resume' : 'Pause';
+    if(!logPaused){
+      fetch('/api/progress/'+RUN_ID).then(function(r){return r.json()}).then(function(d){
+        renderLog((d.progress || {}).log || []);
+      });
+    }
+  }
+
+  function downloadLog(){
+    fetch('/api/progress/'+RUN_ID).then(function(r){return r.json()}).then(function(d){
+      const log = (d.progress || {}).log || [];
+      const text = log.map(function(e){ return '['+e.time+'] ['+e.level.toUpperCase()+'] '+e.message; }).join('\n');
+      const blob = new Blob([text], {type:'text/plain'});
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = 'migration-'+RUN_ID+'-log.txt';
+      a.click();
     });
   }
 
   function cancelMigration(){
-    if(!confirm('Cancel the running migration?'))return;
-    cancelRequested = true;
-    document.getElementById('cancelBtn').disabled=true;
-    document.getElementById('cancelBtn').textContent='Cancelling...';
-    setStatus('cancelled');
-    document.getElementById('statusTitle').textContent = 'Cancelling...';
-    document.getElementById('statusMessage').textContent = 'Sending cancel request...';
-    fetch('/api/cancel/'+runId,{method:'POST'}).catch(()=>{
-      showToast('Cancel request failed — try again','error');
-      document.getElementById('cancelBtn').disabled=false;
-      document.getElementById('cancelBtn').textContent='✕ Cancel Migration';
+    if(!confirm('Cancel the running migration?')) return;
+    cancelSent = true;
+    document.getElementById('cancelBtn').textContent = 'Cancelling…';
+    document.getElementById('cancelBtn').disabled = true;
+    fetch('/api/cancel/'+RUN_ID, {method:'POST'}).catch(function(){
+      showToast('Cancel request failed','error');
+      cancelSent = false;
+      document.getElementById('cancelBtn').textContent = 'Cancel';
+      document.getElementById('cancelBtn').disabled = false;
     });
   }
 
-  function showError(err){
-    setStatus('error');
-    document.getElementById('statusTitle').textContent = 'Migration Failed';
-    document.getElementById('statusMessage').textContent = '';
-    document.getElementById('errorBox').classList.remove('hidden');
-    document.getElementById('errorTitle').textContent = 'Migration Failed';
-    document.getElementById('errorText').textContent = err;
-  }
+  function retryMigration(){ window.location.href = '/retry/' + RUN_ID; }
 
-  setTimeout(poll, 1000);
+  setTimeout(poll, 800);
 </script>
 {% endblock %}

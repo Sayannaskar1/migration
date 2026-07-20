@@ -84,13 +84,13 @@ class JSPythonUDFAgent:
         python_body = self._call_llm(js_body, llm_config)
         if not python_body:
             result.error = "LLM conversion failed — no provider configured or call failed"
-            fallback = self._generate_fallback(raw_sql, obj.object_type)
+            fallback = self._generate_fallback(raw_sql, obj.object_type, obj.name)
             result.converted_sql = fallback
             obj.converted_sql = fallback
             return result
 
         python_body = self._clean_llm_output(python_body)
-        converted = self._generate_databricks_ddl(raw_sql, python_body, obj.object_type)
+        converted = self._generate_databricks_ddl(raw_sql, python_body, obj.object_type, obj.name)
         if converted:
             result.success = True
             result.converted_sql = converted
@@ -133,29 +133,76 @@ class JSPythonUDFAgent:
             logger.warning(f"LLM call failed for JS conversion: {e}")
             return None
 
+    def _ensure_imports(self, body: str) -> str:
+        module_imports = {
+            "math.": "import math",
+            "json.": "import json",
+            "datetime.": "import datetime",
+            "re.": "import re",
+            "random.": "import random",
+            "collections.": "import collections",
+            "itertools.": "import itertools",
+            "functools.": "import functools",
+        }
+        added = set()
+        lines = body.split("\n")
+        import_lines = [l for l in lines if l.strip().startswith("import ")]
+        existing_imports = "\n".join(import_lines).lower()
+
+        for marker, imp in module_imports.items():
+            imp_name = imp.split()[-1]
+            if marker in body.lower() and imp_name not in existing_imports:
+                added.add(imp)
+
+        if not added:
+            return body
+
+        new_lines = []
+        for imp in sorted(added):
+            new_lines.append(imp)
+        if new_lines:
+            new_lines.append("")
+        new_lines.append(body)
+        return "\n".join(new_lines)
+
     def _clean_llm_output(self, text: str) -> str:
         text = text.strip()
         text = re.sub(r"^```python\s*\n?", "", text)
         text = re.sub(r"^```\s*\n?", "", text)
         text = re.sub(r"\n?```\s*$", "", text)
+        text = text.strip()
+        # Remove def wrapper if LLM included it (not needed in Databricks $$ body)
+        text = re.sub(r"^def\s+\w+\s*\([^)]*\):\s*\n?", "", text)
+        # Remove str() wrapping around return values (LLMs often add it unnecessarily)
+        text = re.sub(r"(?i)\breturn\s+str\s*\(", "return ", text)
+        # Clean up extra closing paren left by str(...) removal
+        # Only reduce 3+ consecutive closing parens at end to remove the extra
+        text = re.sub(r"\){3,}\s*$", "))", text.strip())
+        # Dedent the body
+        text = re.sub(r"(?m)^    ", "", text)
+        text = re.sub(r"(?m)^  ", "", text)
         return text.strip()
 
-    def _generate_databricks_ddl(self, raw_sql: str, python_body: str, obj_type: str) -> str | None:
+    def _generate_databricks_ddl(self, raw_sql: str, python_body: str, obj_type: str, obj_name: str | None = None) -> str | None:
         if obj_type == "function":
-            return self._generate_function_ddl(raw_sql, python_body)
+            return self._generate_function_ddl(raw_sql, python_body, obj_name)
         elif obj_type == "procedure":
-            return self._generate_procedure_ddl(raw_sql, python_body)
+            return self._generate_procedure_ddl(raw_sql, python_body, obj_name)
         return None
 
-    def _generate_function_ddl(self, raw_sql: str, python_body: str) -> str:
-        name_match = re.search(
-            r"CREATE\s+(?:OR\s+REPLACE\s+)?(?:SECURE\s+)?FUNCTION\s+([\w.]+)",
-            raw_sql, re.IGNORECASE,
-        )
-        name = name_match.group(1) if name_match else "unknown_func"
+    def _generate_function_ddl(self, raw_sql: str, python_body: str, obj_name: str | None = None) -> str:
+        if obj_name:
+            name = obj_name
+        else:
+            name_match = re.search(
+                r"CREATE\s+(?:OR\s+REPLACE\s+)?(?:SECURE\s+)?FUNCTION\s+([\w.]+)",
+                raw_sql, re.IGNORECASE,
+            )
+            name = name_match.group(1) if name_match else "unknown_func"
 
         params = self._extract_params(raw_sql)
         returns = self._extract_returns(raw_sql)
+        python_body = self._ensure_imports(python_body)
 
         ddl = f"CREATE OR REPLACE FUNCTION {name}({params})\n"
         if returns:
@@ -166,12 +213,15 @@ class JSPythonUDFAgent:
         ddl += "$$"
         return ddl
 
-    def _generate_procedure_ddl(self, raw_sql: str, python_body: str) -> str:
-        name_match = re.search(
-            r"CREATE\s+(?:OR\s+REPLACE\s+)?PROCEDURE\s+([\w.]+)",
-            raw_sql, re.IGNORECASE,
-        )
-        name = name_match.group(1) if name_match else "unknown_proc"
+    def _generate_procedure_ddl(self, raw_sql: str, python_body: str, obj_name: str | None = None) -> str:
+        if obj_name:
+            name = obj_name
+        else:
+            name_match = re.search(
+                r"CREATE\s+(?:OR\s+REPLACE\s+)?PROCEDURE\s+([\w.]+)",
+                raw_sql, re.IGNORECASE,
+            )
+            name = name_match.group(1) if name_match else "unknown_proc"
 
         params = self._extract_params(raw_sql)
 
@@ -184,27 +234,99 @@ class JSPythonUDFAgent:
         return ddl
 
     def _extract_params(self, sql: str) -> str:
+        # Try the standard Snowflake DDL pattern first
         match = re.search(
-            r"(?:FUNCTION|PROCEDURE)\s+\w+\s*\(([^)]*)\)",
+            r"(?:FUNCTION|PROCEDURE)\s+[\w.]+\s*\(",
             sql, re.IGNORECASE,
         )
         if not match:
-            return ""
-        params_raw = match.group(1).strip()
+            # Fallback: look for any parenthesized param list after CREATE FUNCTION/PROCEDURE
+            # Use [^\s(]+ to stop at '(' — \S+ would gobble "name"("first_param
+            match = re.search(
+                r"CREATE\s+(?:OR\s+REPLACE\s+)?(?:SECURE\s+)?(?:FUNCTION|PROCEDURE)\s+[^\s(]+\s*",
+                sql, re.IGNORECASE,
+            )
+            if match:
+                after_name = sql[match.end():].strip()
+                if after_name.startswith("("):
+                    match = type("_", (), {"end": lambda: match.end()})()
+                    match.end = lambda: match.end()
+                    # recreate as a real match
+                    match = re.search(
+                        r"CREATE\s+(?:OR\s+REPLACE\s+)?(?:SECURE\s+)?(?:FUNCTION|PROCEDURE)\s+[^\s(]+\s*\(",
+                        sql, re.IGNORECASE,
+                    )
+            if not match:
+                return ""
+        paren_start = match.end() - 1
+        depth = 1
+        i = paren_start + 1
+        while i < len(sql) and depth > 0:
+            if sql[i] == "(":
+                depth += 1
+            elif sql[i] == ")":
+                depth -= 1
+            i += 1
+        params_raw = sql[paren_start + 1 : i - 1].strip()
         if not params_raw:
             return ""
         params = []
-        for param in params_raw.split(","):
+        depth = 0
+        current = ""
+        for ch in params_raw:
+            if ch in ("(",):
+                depth += 1
+                current += ch
+            elif ch in (")",):
+                depth -= 1
+                current += ch
+            elif ch == "," and depth == 0:
+                params.append(current.strip())
+                current = ""
+            else:
+                current += ch
+        if current.strip():
+            params.append(current.strip())
+        type_map_params = {
+            "NUMBER": "DOUBLE",
+            "FLOAT": "DOUBLE",
+            "FLOAT4": "DOUBLE",
+            "FLOAT8": "DOUBLE",
+            "DOUBLE": "DOUBLE",
+            "DOUBLE_PRECISION": "DOUBLE",
+            "REAL": "DOUBLE",
+            "VARCHAR": "STRING",
+            "STRING": "STRING",
+            "TEXT": "STRING",
+            "INT": "INT",
+            "INTEGER": "INT",
+            "BIGINT": "BIGINT",
+            "SMALLINT": "INT",
+            "TINYINT": "INT",
+            "BOOLEAN": "BOOLEAN",
+            "DATE": "DATE",
+            "TIMESTAMP": "TIMESTAMP",
+            "TIMESTAMP_NTZ": "TIMESTAMP",
+            "TIMESTAMP_LTZ": "TIMESTAMP",
+            "TIMESTAMP_TZ": "TIMESTAMP",
+            "BINARY": "BINARY",
+            "VARBINARY": "BINARY",
+            "ARRAY": "ARRAY<STRING>",
+            "OBJECT": "MAP<STRING, STRING>",
+            "VARIANT": "STRING",
+        }
+        converted = []
+        for param in params:
             param = param.strip()
-            param = re.sub(r"\bNUMBER\b", "DOUBLE", param, flags=re.IGNORECASE)
-            param = re.sub(r"\bVARCHAR\b", "STRING", param, flags=re.IGNORECASE)
-            param = re.sub(r"\bINT\b", "INT", param, flags=re.IGNORECASE)
-            param = re.sub(r"\bINTEGER\b", "INT", param, flags=re.IGNORECASE)
-            param = re.sub(r"\bBOOLEAN\b", "BOOLEAN", param, flags=re.IGNORECASE)
-            param = re.sub(r"\bDATE\b", "DATE", param, flags=re.IGNORECASE)
-            param = re.sub(r"\bTIMESTAMP\b", "TIMESTAMP", param, flags=re.IGNORECASE)
-            params.append(param)
-        return ", ".join(params)
+            for src, dst in type_map_params.items():
+                param = re.sub(
+                    rf"\b{src}\b(?:\s*\([^)]*\))?",
+                    dst,
+                    param,
+                    flags=re.IGNORECASE,
+                )
+            converted.append(param)
+        return ", ".join(converted)
 
     def _extract_returns(self, sql: str) -> str:
         match = re.search(r"\bRETURNS\s+(\w+)", sql, re.IGNORECASE)
@@ -213,26 +335,52 @@ class JSPythonUDFAgent:
         ret_type = match.group(1).upper()
         type_map = {
             "NUMBER": "DOUBLE",
-            "VARCHAR": "STRING",
-            "STRING": "STRING",
+            "FLOAT": "DOUBLE",
+            "FLOAT4": "DOUBLE",
+            "FLOAT8": "DOUBLE",
+            "DOUBLE": "DOUBLE",
+            "DOUBLE_PRECISION": "DOUBLE",
+            "REAL": "DOUBLE",
             "INT": "INT",
             "INTEGER": "INT",
+            "BIGINT": "BIGINT",
+            "SMALLINT": "INT",
+            "TINYINT": "INT",
+            "BYTEINT": "INT",
+            "VARCHAR": "STRING",
+            "STRING": "STRING",
+            "TEXT": "STRING",
+            "CHAR": "STRING",
+            "CHARACTER": "STRING",
+            "NVARCHAR": "STRING",
+            "NCHAR": "STRING",
             "BOOLEAN": "BOOLEAN",
             "DATE": "DATE",
             "TIMESTAMP": "TIMESTAMP",
+            "TIMESTAMP_NTZ": "TIMESTAMP",
+            "TIMESTAMP_LTZ": "TIMESTAMP",
+            "TIMESTAMP_TZ": "TIMESTAMP",
+            "BINARY": "BINARY",
+            "VARBINARY": "BINARY",
         }
-        return type_map.get(ret_type, "STRING")
+        return type_map.get(ret_type, "DOUBLE")
 
-    def _generate_fallback(self, raw_sql: str, obj_type: str) -> str:
-        name_match = re.search(
-            r"(?:FUNCTION|PROCEDURE)\s+([\w.]+)",
-            raw_sql, re.IGNORECASE,
-        )
-        name = name_match.group(1) if name_match else "unknown"
+    def _generate_fallback(self, raw_sql: str, obj_type: str, obj_name: str | None = None) -> str:
+        if obj_name:
+            name = obj_name
+        else:
+            name_match = re.search(
+                r"(?:FUNCTION|PROCEDURE)\s+([\w.]+)",
+                raw_sql, re.IGNORECASE,
+            )
+            name = name_match.group(1) if name_match else "unknown"
         keyword = "FUNCTION" if obj_type == "function" else "PROCEDURE"
 
+        params = self._extract_params(raw_sql)
+        returns = self._extract_returns(raw_sql)
         return (
-            f"CREATE OR REPLACE {keyword} {name}()\n"
+            f"CREATE OR REPLACE {keyword} {name}({params})\n"
+            f"RETURNS {returns}\n"
             f"LANGUAGE PYTHON\n"
             f"AS $$\n"
             f"# TODO: Convert JavaScript body to Python\n"

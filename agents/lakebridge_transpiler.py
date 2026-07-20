@@ -37,6 +37,11 @@ def transpile_with_lakebridge(sql: str, pretty: bool = True) -> Optional[str]:
                 error_level=errors.ErrorLevel.WARN,
             )
             if result and result[0]:
+                # LakeBridge may comment out the statement with "--" when it cannot
+                # fully parse Snowflake-specific syntax (WITH MASKING POLICY, etc.).
+                # Fall back to raw SQLGlot which passes unsupported syntax through.
+                if result[0].strip().startswith("--"):
+                    return _transpile_raw_sqlglot(sql, pretty)
                 return result[0]
         return _transpile_raw_sqlglot(sql, pretty)
     except Exception as e:
@@ -53,8 +58,18 @@ def _transpile_raw_sqlglot(sql: str, pretty: bool = True) -> Optional[str]:
             pretty=pretty,
             error_level=errors.ErrorLevel.WARN,
         )
-        if result:
-            return result[0]
+        if result and result[0]:
+            out = result[0]
+            # SQLGlot may comment out the entire CREATE statement with "--" prefix
+            # when it encounters unsupported syntax (LakeBridge monkey-patches sqlglot
+            # globally, so even standard dialect calls are affected). Strip the "--"
+            # prefix from the first line to recover the DDL structure.
+            if out.strip().startswith("--"):
+                lines = out.split('\n')
+                if lines:
+                    lines[0] = lines[0].lstrip('- ')
+                out = '\n'.join(lines)
+            return out
         return None
     except Exception as e:
         logger.warning(f"Raw SQLGlot transpilation failed: {e}")

@@ -136,6 +136,23 @@
     <div class="form-group"></div>
   </div>
 
+  <div style="margin-top:1.25rem;padding:1.25rem;background:var(--bg);border-radius:var(--radius-sm);border:1px solid #d1d5db">
+    <div style="display:flex;align-items:center;gap:.6rem;margin-bottom:.75rem">
+      <svg viewBox="0 0 24 24" width="20" height="20" style="flex-shrink:0"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 17.93c-3.95-.49-7-3.85-7-7.93 0-.62.08-1.21.21-1.79L9 15v1c0 1.1.9 2 2 2v1.93zm6.9-2.54c-.26-.81-1-1.39-1.9-1.39h-1v-3c0-.55-.45-1-1-1H8v-2h2c.55 0 1-.45 1-1V7h2c1.1 0 2-.9 2-2v-.41c2.93 1.19 5 4.06 5 7.41 0 2.08-.8 3.97-2.1 5.39z" fill="#6b7280"/></svg>
+      <span style="font-weight:600;font-size:.85rem">Target Cloud</span>
+    </div>
+    <div class="form-row">
+      <div class="form-group">
+        <label for="target_cloud">Cloud Provider</label>
+        <select id="target_cloud" class="form-input">
+          <option value="aws">Amazon Web Services (AWS)</option>
+          <option value="azure">Microsoft Azure</option>
+          <option value="gcp">Google Cloud Platform (GCP)</option>
+        </select>
+      </div>
+    </div>
+  </div>
+
   <div style="margin-top:1rem;padding:1rem;background:var(--bg);border-radius:var(--radius-sm);display:flex;align-items:center;gap:.75rem">
     <div style="width:36px;height:36px;border-radius:8px;background:var(--accent-light);display:flex;align-items:center;justify-content:center;flex-shrink:0;font-size:.75rem;font-weight:700;color:var(--accent)">DB</div>
     <label style="flex:1;cursor:pointer">
@@ -222,6 +239,7 @@
   function loadProject(btn){
     try{
       const p = JSON.parse(btn.dataset.project);
+      setField('target_cloud', p.target_cloud || 'aws');
       setField('sf_account', p.sf_account);
       setField('sf_warehouse', p.sf_warehouse);
       setField('sf_user', p.sf_user);
@@ -266,7 +284,8 @@
     const fd=new FormData();
     fd.set('name',name);
     fd.set('description',desc);
-    ['sf_account','sf_user','sf_password','sf_warehouse','sf_role','sf_database','sf_schema',
+    ['target_cloud',
+     'sf_account','sf_user','sf_password','sf_warehouse','sf_role','sf_database','sf_schema',
      'db_hostname','db_http_path','db_token','db_catalog','db_schema'].forEach(id=>{
       const el=document.getElementById(id);
       if(el)fd.set(id,el.value);

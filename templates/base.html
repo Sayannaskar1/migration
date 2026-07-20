@@ -40,6 +40,30 @@
     --radius-lg:16px;
     --transition:.2s cubic-bezier(.4,0,.2,1)
   }
+  [data-theme="dark"]{
+    --sidebar:#0a0e1a;
+    --sidebar-hover:#131a2e;
+    --bg:#0f1318;
+    --card:#1a1f2e;
+    --card-border:#2a3040;
+    --card-shadow:0 1px 3px rgba(0,0,0,.2),0 1px 2px rgba(0,0,0,.15);
+    --card-shadow-hover:0 10px 25px -5px rgba(0,0,0,.3),0 4px 10px -5px rgba(0,0,0,.2);
+    --text:#e2e8f0;
+    --text-secondary:#94a3b8;
+    --text-muted:#64748b;
+    --accent:#818cf8;
+    --accent-hover:#6366f1;
+    --accent-light:#1e1b4b;
+    --accent-glow:rgba(129,140,248,.15);
+    --success:#34d399;
+    --success-light:#064e3b;
+    --warning:#fbbf24;
+    --warning-light:#451a03;
+    --error:#f87171;
+    --error-light:#450a0a;
+    --info:#60a5fa;
+    --info-light:#1e3a5f
+  }
   html{font-size:15px;scroll-behavior:smooth}
   body{
     font-family:var(--font);background:var(--bg);color:var(--text);
@@ -114,7 +138,7 @@
   /* ── Main ── */
   .main{margin-left:var(--sidebar-width);flex:1;min-height:100vh;display:flex;flex-direction:column}
   .topbar{
-    background:rgba(255,255,255,.8);-webkit-backdrop-filter:blur(12px);backdrop-filter:blur(12px);
+    background:color-mix(in srgb, var(--card) 80%, transparent);-webkit-backdrop-filter:blur(12px);backdrop-filter:blur(12px);
     border-bottom:1px solid var(--card-border);
     padding:1rem 2rem;display:flex;align-items:center;justify-content:space-between;
     position:sticky;top:0;z-index:50
@@ -267,6 +291,9 @@
   }
   .step.active .step-circle{border-color:var(--accent);background:var(--accent);color:#fff}
   .step.done .step-circle{border-color:var(--success);background:var(--success);color:#fff}
+  .step.running .step-circle{border-color:var(--accent);background:var(--accent);color:#fff;animation:step-pulse 1.2s ease-in-out infinite}
+  .step.running{color:var(--accent)}
+  @keyframes step-pulse{0%,100%{box-shadow:0 0 0 0 rgba(99,102,241,.4)}50%{box-shadow:0 0 0 6px rgba(99,102,241,.1)}}
   .step.active .step-label,.step.done .step-label{color:var(--text)}
   .step-connector{
     flex:1;height:2px;background:var(--card-border);margin:0 .75rem;min-width:2rem;
@@ -486,6 +513,7 @@
     <div class="topbar-status">
       <span class="pulse"></span>
       <span>System Ready</span>
+      <button class="dark-mode-btn" onclick="toggleDarkMode()" style="margin-left:.75rem;background:none;border:1px solid var(--card-border);border-radius:var(--radius-sm);padding:.3rem .65rem;font-size:.78rem;cursor:pointer;color:var(--text);transition:all var(--transition)">🌙 Dark Mode</button>
     </div>
   </header>
   <div class="content">
@@ -525,18 +553,37 @@
     }
   });
 
-  // Copy code button
+  // Copy code button (handles both .code-block and .sql-block parents)
   document.addEventListener('click',function(e){
     const btn=e.target.closest('.copy-btn');
     if(!btn)return;
-    const block=btn.closest('.code-block');
+    const block=btn.closest('.code-block')||btn.closest('.sql-block');
     if(!block)return;
-    const code=block.querySelector('pre')?.textContent||'';
+    let code=block.querySelector('pre')?.textContent||'';
+    if(!code) code=block.querySelector('code')?.textContent||'';
     navigator.clipboard.writeText(code).then(()=>{
       const t=btn.textContent;btn.textContent='Copied!';
       setTimeout(()=>btn.textContent=t,1500)
     }).catch(()=>{})
   });
+
+  // Dark Mode toggle
+  function toggleDarkMode() {
+    const html = document.documentElement;
+    const isDark = html.getAttribute('data-theme') === 'dark';
+    html.setAttribute('data-theme', isDark ? 'light' : 'dark');
+    localStorage.setItem('theme', isDark ? 'light' : 'dark');
+    document.querySelectorAll('.dark-mode-btn').forEach(b => {
+      b.textContent = isDark ? '🌙 Dark Mode' : '☀️ Light Mode';
+    });
+  }
+  (function() {
+    const saved = localStorage.getItem('theme');
+    if (saved === 'dark') {
+      document.documentElement.setAttribute('data-theme', 'dark');
+      document.querySelectorAll('.dark-mode-btn').forEach(b => b.textContent = '☀️ Light Mode');
+    }
+  })();
 </script>
 </body>
 </html>

@@ -3,6 +3,8 @@ import logging
 import os
 from typing import Optional
 
+_LLM_QUOTA_EXCEEDED: bool = False
+
 logger = logging.getLogger(__name__)
 
 LLM_SYSTEM_PROMPT = """You are an expert SQL migration specialist.
@@ -117,11 +119,17 @@ def _call_gemini(system: str, user: str, config: dict) -> Optional[str]:
         return resp.text
     except Exception as e:
         logger.warning(f"Gemini LLM call failed: {e}")
+        if "429" in str(e):
+            global _LLM_QUOTA_EXCEEDED
+            _LLM_QUOTA_EXCEEDED = True
+            logger.warning("LLM API quota exhausted — skipping remaining LLM calls")
         return None
 
 
 def llm_transpile(sql: str, config: Optional[dict] = None) -> Optional[str]:
     """Transpile Snowflake SQL to Databricks using an LLM overlay."""
+    if _LLM_QUOTA_EXCEEDED:
+        return None
     cfg = config or _get_llm_config()
     provider = cfg.get("provider") or os.environ.get("LLM_PROVIDER", "")
     if not provider:

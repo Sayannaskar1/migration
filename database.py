@@ -43,6 +43,7 @@ def init_db():
             db_token TEXT DEFAULT '',
             db_catalog TEXT DEFAULT '',
             db_schema TEXT DEFAULT '',
+            target_cloud TEXT DEFAULT 'aws',
             created_at REAL,
             updated_at REAL
         );
@@ -99,6 +100,10 @@ def init_db():
         CREATE INDEX IF NOT EXISTS idx_runs_project ON runs(project_id);
         CREATE INDEX IF NOT EXISTS idx_runs_created ON runs(created_at DESC);
     """)
+    try:
+        c.execute("ALTER TABLE runs ADD COLUMN platform_analyses TEXT DEFAULT '[]'")
+    except Exception:
+        pass  # Column already exists
     c.commit()
 
     for col, typ, default in [
@@ -115,6 +120,12 @@ def init_db():
             c.commit()
         except sqlite3.OperationalError:
             pass
+
+    try:
+        c.execute("ALTER TABLE projects ADD COLUMN target_cloud TEXT DEFAULT 'aws'")
+        c.commit()
+    except sqlite3.OperationalError:
+        pass
 
     for col in ("sf_user", "sf_password", "sf_warehouse", "sf_role", "sf_database", "sf_schema"):
         c.execute(f"""
@@ -195,6 +206,7 @@ def store_run(run_id: str, data: dict):
         "schema_ddl": json.dumps(data.get("schema_ddl", []), default=str),
         "deploy_results": json.dumps(data.get("deploy_results", []), default=str),
         "data_migration_results": json.dumps(data.get("data_migration_results", []), default=str),
+        "platform_analyses": json.dumps(data.get("platform_analyses", []), default=str),
         "sf_password": data.get("sf_password", ""),
         "sf_warehouse": data.get("sf_warehouse", ""),
         "sf_role": data.get("sf_role", ""),
@@ -288,7 +300,7 @@ def clear_ddl_cache():
 _JSON_FIELDS = {
     "progress", "completed_steps", "conversions", "summary", "plan",
     "confidence_scores", "storage_report", "catalog_ddl", "schema_ddl",
-    "deploy_results", "data_migration_results",
+    "deploy_results", "data_migration_results", "platform_analyses",
 }
 
 

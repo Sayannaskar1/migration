@@ -773,8 +773,11 @@ class SnowflakeConnector(SourceConnector):
                     tree[f"{schema_prefix}/{name}.sql_type"] = "dynamic_table"
                     summary["dynamic_tables"] += 1
 
-        # ── Account-level object extraction ──
+        # ── Account-level object extraction (only when no specific database targeted) ──
         account_prefix = "__account__"
+
+        if self.database:
+            return {"tree": tree, "summary": summary}
 
         warehouses = self.list_warehouses()
         for w in warehouses:
@@ -960,6 +963,16 @@ class SnowflakeConnector(SourceConnector):
                     obj_type = g.get("granted_on", "")
                     obj_name = g.get("name", "")
                     grantee_name = g.get("grantee_name", "")
+                    if self.database:
+                        obj_upper = obj_name.upper()
+                        db_upper = self.database.upper()
+                        if obj_type == "DATABASE":
+                            if obj_upper != db_upper:
+                                continue
+                        elif "." in obj_name:
+                            first_part = obj_name.split(".")[0].upper()
+                            if first_part != db_upper:
+                                continue
                     grant_lines.append(
                         f"GRANT {priv} ON {obj_type} {obj_name} TO ROLE {grantee_name};"
                     )

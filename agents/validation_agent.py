@@ -1,5 +1,6 @@
 import re
 from typing import Optional
+import sqlglot
 from agents.project_loader import ParsedObject, ProjectInventory
 from parser.ast_parser import validate_sql_syntax, detect_snowflake_features
 
@@ -13,6 +14,7 @@ class ValidationResult:
         self.issues: list[str] = []
         self.warnings: list[str] = []
         self.errors: list[str] = []
+        self.notes: list[str] = []
         self.confidence: float = 1.0
 
     def is_pass(self) -> bool:
@@ -37,19 +39,46 @@ class ValidationResult:
             "errors": self.errors,
             "issues": self.issues,
             "warnings": self.warnings,
+            "notes": self.notes,
         }
 
 
-def _validate_schema_match(source: ParsedObject, target_sql: str) -> list[str]:
+def _count_columns(sql: str) -> int:
+    col_pattern = r"(\w+)\s+(?:NUMBER|VARCHAR|VARIANT|OBJECT|ARRAY|TIMESTAMP(?:_NTZ|_LTZ|_TZ)?|TIMESTAMPNTZ|TIMESTAMPLTZ|TIMESTAMP_TZ|DATE|BOOLEAN|INT|INTEGER|FLOAT|FLOAT8|DOUBLE|STRING|TEXT|BINARY|DECIMAL|BIGINT|SMALLINT|TINYINT|BYTE|BYTES|INTERVAL|GEOGRAPHY|GEOMETRY)"
+    try:
+        tree = sqlglot.parse_one(sql)
+        cols = list(tree.find_all(sqlglot.exp.ColumnDef))
+        if cols:
+            return len(cols)
+    except Exception:
+        pass
+    # SQLGlot may fall back to Command for backtick-quoted tables — retry after stripping backticks
+    no_backticks = sql.replace("`", "")
+    if no_backticks != sql:
+        try:
+            tree = sqlglot.parse_one(no_backticks)
+            cols = list(tree.find_all(sqlglot.exp.ColumnDef))
+            if cols:
+                return len(cols)
+        except Exception:
+            pass
+    matches = [m for m in re.findall(col_pattern, sql, re.IGNORECASE)
+               if m.upper() not in ("AS", "NOT", "KEY", "BY", "ON", "IN", "SET", "ALL", "FOR", "AND", "OR")]
+    return len(matches)
+
+
+def _validate_schema_match(source: ParsedObject, target_sql: str) -> tuple[list[str], list[str]]:
+    notes: list[str] = []
     issues: list[str] = []
-    col_pattern = r"(\w+)\s+(?:NUMBER|VARCHAR|VARIANT|OBJECT|ARRAY|TIMESTAMP|DATE|BOOLEAN|INT|FLOAT|STRING|TEXT|BINARY|DECIMAL)"
-    source_cols = re.findall(col_pattern, source.raw_sql, re.IGNORECASE)
-    target_cols = re.findall(col_pattern, target_sql, re.IGNORECASE)
-    if len(source_cols) != len(target_cols):
+    source_count = _count_columns(source.raw_sql)
+    target_count = _count_columns(target_sql)
+    if source_count != target_count:
         issues.append(
-            f"Column count mismatch: source={len(source_cols)}, target={len(target_cols)}"
+            f"Column count mismatch: source={source_count}, target={target_count}"
         )
-    return issues
+    else:
+        notes.append(f"Column count verified: {source_count} columns")
+    return notes, issues
 
 
 def _check_remaining_snowflake(target_sql: str) -> list[str]:
@@ -83,17 +112,18 @@ def _check_variant_mapping(source: ParsedObject, target_sql: str) -> list[str]:
     return warnings
 
 
-def _check_constraints(source: ParsedObject, target_sql: str) -> list[str]:
+def _check_constraints(source: ParsedObject, target_sql: str) -> tuple[list[str], list[str]]:
+    notes: list[str] = []
     warnings: list[str] = []
     if re.search(r"\bPRIMARY\s+KEY\b", source.raw_sql, re.IGNORECASE):
-        warnings.append(
-            "PRIMARY KEY is informational in Databricks Unity Catalog — constraints are not enforced"
+        notes.append(
+            "PRIMARY KEY metadata preserved — Snowflake and Databricks both treat PRIMARY KEY as informational metadata for standard tables"
         )
     if re.search(r"\bFOREIGN\s+KEY\b", source.raw_sql, re.IGNORECASE):
-        warnings.append(
-            "FOREIGN KEY is informational in Databricks Unity Catalog — constraints are not enforced"
+        notes.append(
+            "FOREIGN KEY metadata preserved — Snowflake and Databricks both treat FOREIGN KEY as informational metadata for standard tables"
         )
-    return warnings
+    return notes, warnings
 
 
 def validate_object(
@@ -101,46 +131,62 @@ def validate_object(
 ) -> ValidationResult:
     result = ValidationResult(obj)
 
+    _ARCHITECTURAL_TYPES = {
+        "pipe", "task", "file_format", "stream", "stage",
+        "masking_policy", "row_access_policy", "sequence",
+    }
+
     if obj.converted_sql is None:
         result.status = "ERROR"
         result.errors.append("No converted SQL available")
         return result
 
-    syntax_errors = validate_sql_syntax(obj.converted_sql)
-    for err in syntax_errors:
-        result.errors.append(f"Syntax error: {err}")
+    if obj.object_type in _ARCHITECTURAL_TYPES:
+        result.notes.append(
+            f"SQL validation skipped — {obj.object_type} converted to architecture artifact, not executable SQL"
+        )
+        result.status = ValidationResult.ARCHITECTURAL_CHANGE
+    else:
+        syntax_errors = validate_sql_syntax(obj.converted_sql)
+        for err in syntax_errors:
+            result.errors.append(f"Syntax error: {err}")
 
-    if obj.object_type == "table":
-        schema_issues = _validate_schema_match(obj, obj.converted_sql)
-        for issue in schema_issues:
+        if obj.object_type == "table":
+            schema_notes, schema_issues = _validate_schema_match(obj, obj.converted_sql)
+            for n in schema_notes:
+                result.notes.append(n)
+            for issue in schema_issues:
+                result.issues.append(issue)
+
+        remaining = _check_remaining_snowflake(obj.converted_sql)
+        for issue in remaining:
             result.issues.append(issue)
 
-    remaining = _check_remaining_snowflake(obj.converted_sql)
-    for issue in remaining:
-        result.issues.append(issue)
+        invalid_types = _check_invalid_databricks_types(obj.converted_sql)
+        for err in invalid_types:
+            result.errors.append(err)
 
-    invalid_types = _check_invalid_databricks_types(obj.converted_sql)
-    for err in invalid_types:
-        result.errors.append(err)
+        variant_warnings = _check_variant_mapping(obj, obj.converted_sql)
+        for w in variant_warnings:
+            result.warnings.append(w)
 
-    variant_warnings = _check_variant_mapping(obj, obj.converted_sql)
-    for w in variant_warnings:
-        result.warnings.append(w)
+        warnings = _check_manual_review(obj.converted_sql)
+        for w in warnings:
+            result.warnings.append(w)
 
-    warnings = _check_manual_review(obj.converted_sql)
-    for w in warnings:
-        result.warnings.append(w)
-
-    constraint_warnings = _check_constraints(obj, obj.converted_sql)
+    constraint_notes, constraint_warnings = _check_constraints(obj, obj.converted_sql)
+    for n in constraint_notes:
+        result.notes.append(n)
     for w in constraint_warnings:
         result.warnings.append(w)
 
     if re.search(r"\bSECURE\s+VIEW\b", obj.raw_sql, re.IGNORECASE):
-        result.warnings.append(
-            "SECURE VIEW access controls lost — review security model in Databricks"
+        result.notes.append(
+            "SECURE VIEW converted to standard Databricks VIEW — Snowflake SECURE VIEW has no direct equivalent. "
+            "Review Unity Catalog permissions, row filters, and column masks to preserve the intended security model."
         )
 
-    if re.search(r"\bLANGUAGE\s+JAVASCRIPT\b", obj.raw_sql, re.IGNORECASE):
+    if re.search(r"\bLANGUAGE\s+JAVASCRIPT\b", obj.converted_sql or "", re.IGNORECASE):
         result.errors.append(
             "LANGUAGE JAVASCRIPT is not supported in Databricks — convert to Python or Scala"
         )

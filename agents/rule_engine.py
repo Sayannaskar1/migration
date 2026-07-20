@@ -90,6 +90,7 @@ def _find_matching_paren(sql: str, start: int) -> int:
 def _apply_ddl_rules(sql: str) -> str:
     sql = re.sub(r"(?i)CLUSTER\s+BY\s*\(", "ZORDER BY (", sql)
     sql = re.sub(r"(?i)TABLESPACE\s+\S+", "", sql)
+    sql = re.sub(r"(?i)(PRIMARY\s+KEY\s*\([^)]*?)\s+NULLS\s+LAST", r"\1", sql)
     match = re.search(
         r"CREATE\s+(?:OR\s+REPLACE\s+)?TABLE\s+(\S+)",
         sql,
@@ -248,9 +249,17 @@ def _wrap_subquery(
 def _extract_args(args_str: str) -> list[str]:
     args = []
     depth = 0
+    quote = None
     current = ""
     for ch in args_str:
-        if ch == "(":
+        if quote:
+            current += ch
+            if ch == quote:
+                quote = None
+        elif ch in ("'", '"'):
+            quote = ch
+            current += ch
+        elif ch == "(":
             depth += 1
             current += ch
         elif ch == ")":
@@ -521,7 +530,7 @@ def _apply_function_rules(sql: str) -> str:
     )
     sql = _replace_func(sql, "ZEROIFNULL", "COALESCE({inner}, 0)")
     sql = _replace_func(sql, "NULLIFZERO", "IF({inner} = 0, NULL, {inner})")
-    sql = _replace_func(sql, "TO_VARCHAR", "CAST({inner} AS STRING)")
+    sql = _convert_to_varchar(sql)
     sql = _replace_func(sql, "TO_NUMBER", "CAST({inner} AS DECIMAL)")
     sql = _replace_func(sql, "TO_CHAR", "DATE_FORMAT({inner})")
     sql = _replace_func(sql, "MONTHNAME", "DATE_FORMAT({inner}, 'MMM')")
@@ -557,7 +566,7 @@ def _apply_function_rules(sql: str) -> str:
             if _p not in _dateparts:
                 break
             if _p == "YEAR":
-                _repl = f"FLOOR(CAST(DATEDIFF({_end}, {_start}) AS DOUBLE) / 365.25)"
+                _repl = f"YEAR({_end}) - YEAR({_start})"
             elif _p == "MONTH":
                 _repl = f"CAST(MONTHS_BETWEEN({_end}, {_start}) AS INT)"
             elif _p == "DAY":
@@ -589,16 +598,84 @@ def _apply_function_rules(sql: str) -> str:
     )
     sql = re.sub(
         r"(?i)NEXTVAL\s*\(\s*'([^']+)'\s*\)",
-        r"\1.NEXTVAL",
+        r"NEXT VALUE FOR \1",
+        sql,
+    )
+    sql = re.sub(
+        r"(?i)([\w.]+)\.NEXTVAL\b",
+        r"NEXT VALUE FOR \1",
         sql,
     )
     sql = re.sub(
         r"(?i)CURRVAL\s*\(\s*'([^']+)'\s*\)",
-        r"\1.CURRVAL",
+        r"\1.CURRVAL /* NOTE: CURRVAL has no Databricks equivalent — use LAST_QUERY_ID or maintain client-side state */",
         sql,
     )
     sql = sql.replace("__TRY_PARSE_JSON__(", "TRY_PARSE_JSON(")
     return sql
+
+
+def _is_date_format(mask: str) -> bool:
+    date_specifiers = {"YYYY", "YY", "MON", "MONTH", "DD", "HH24", "HH12", "HH", "MI", "SS", "FF", "AM", "PM"}
+    return any(s in mask.upper() for s in date_specifiers)
+
+
+def _convert_date_format(mask: str) -> str:
+    mask_upper = mask.upper()
+    mask_upper = re.sub(r"YYYY", "yyyy", mask_upper)
+    mask_upper = re.sub(r"(?<!Y)YY(?!Y)", "yy", mask_upper)
+    mask_upper = re.sub(r"MONTH", "MMMM", mask_upper)
+    mask_upper = re.sub(r"MON", "MMM", mask_upper)
+    mask_upper = re.sub(r"DD", "dd", mask_upper)
+    mask_upper = re.sub(r"HH24", "HH", mask_upper)
+    mask_upper = re.sub(r"HH12", "hh", mask_upper)
+    mask_upper = re.sub(r"MI", "mm", mask_upper)
+    mask_upper = re.sub(r"SS", "ss", mask_upper)
+    mask_upper = re.sub(r"FF[1-9]", "S", mask_upper)
+    mask_upper = re.sub(r"FF", "S", mask_upper)
+    mask_upper = re.sub(r"AM", "a", mask_upper)
+    mask_upper = re.sub(r"PM", "a", mask_upper)
+    mask_upper = mask_upper.replace('"', '').replace("'", "")
+    return mask_upper
+
+
+def _is_numeric_format(mask: str) -> bool:
+    return bool(re.search(r"[90,.]+", mask)) and not _is_date_format(mask)
+
+
+def _convert_to_varchar(sql: str) -> str:
+    result = sql
+    pattern = re.compile(r"TO_VARCHAR\s*\(", re.IGNORECASE)
+    while True:
+        match = pattern.search(result)
+        if not match:
+            break
+        start = match.start()
+        paren_start = match.end() - 1
+        close = _find_matching_paren(result, paren_start)
+        if close == -1:
+            break
+        inner = result[paren_start + 1 : close]
+        inner_norm = inner.replace("''", "'")
+        args = _extract_args(inner_norm)
+        if len(args) > 1 and args[1].strip().startswith("'"):
+            mask = args[1].strip().strip("'\"")
+            if _is_date_format(mask):
+                converted = _convert_date_format(mask)
+                replacement = f"DATE_FORMAT({args[0]}, '{converted}')"
+            elif _is_numeric_format(mask):
+                decimal_part = mask.split(".")[-1] if "." in mask else ""
+                decimal_count = len(decimal_part)
+                replacement = f"format_number({args[0]}, {decimal_count})"
+                if decimal_count == 0:
+                    replacement += f" /* NOTE: numeric format mask '{mask}' dropped — review */"
+            else:
+                replacement = f"CAST({args[0]} AS STRING)"
+                replacement += f" /* NOTE: format mask {args[1]} dropped — review formatting */"
+        else:
+            replacement = f"CAST({args[0]} AS STRING)"
+        result = result[:start] + replacement + result[close + 1 :]
+    return result
 
 
 def apply_rules(sql: str, object_type: Optional[str] = None) -> str:

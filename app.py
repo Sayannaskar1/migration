@@ -25,8 +25,85 @@ from connectors.databricks_connector import DatabricksConnector
 _env = Environment(loader=FileSystemLoader(str(_BASE_DIR / "templates")), autoescape=True)
 
 def _tr(name: str, context: dict, status_code: int = 200) -> HTMLResponse:
+    if "report" in context and "report_body" not in context:
+        context["report_body"] = _report_body(context["report"] or "")
     content = _env.get_template(name).render(context)
     return HTMLResponse(content, status_code=status_code)
+
+
+def _report_body(html: str) -> str:
+    """Strip outer html/head/body wrapper and script tags, scope CSS under .rp to prevent leaks."""
+    if not html.strip().startswith("<!DOCTYPE html>"):
+        return html
+    match = re.search(r"<style>(.*?)</style>", html, re.DOTALL)
+    raw_style = match.group(1) if match else ""
+    scoped_style = _scope_css(raw_style) if raw_style else ""
+    style_tag = f"<style>{scoped_style}</style>" if scoped_style else ""
+    match = re.search(r"<body>(.*)</body>", html, re.DOTALL)
+    body = match.group(1) if match else html
+    body = re.sub(r"<script[^>]*>.*?</script>", "", body, flags=re.DOTALL)
+    body = re.sub(r"<script[^>]*/>", "", body)
+    return style_tag + '<div class="rp">' + body + "</div>"
+
+
+def _scope_css(css: str) -> str:
+    """Prefix every CSS selector with .rp to scope styles to the report container."""
+    out = []
+    in_rule = False
+    for line in css.split("\n"):
+        stripped = line.strip()
+        if not stripped:
+            out.append(line)
+            continue
+
+        if stripped.startswith("@media") or stripped.startswith("@supports"):
+            out.append(line)
+            continue
+
+        if stripped.startswith("@") and not in_rule:
+            out.append(line)
+            if not stripped.endswith(";"):
+                in_rule = "{" in line
+            continue
+
+        # Handle closing brace of a multi-line rule
+        if stripped in ("}", "};"):
+            out.append(line)
+            in_rule = False
+            continue
+
+        # If we are inside a multi-line rule body, pass properties through as-is
+        if in_rule:
+            out.append(line)
+            continue
+
+        # Single-line rule: selector{properties}
+        if "{" in stripped:
+            idx = line.index("{")
+            before = line[:idx]
+            after = "{" + line[idx + 1:]
+            # If the line also has a closing brace, this is a single-line rule
+            has_close = "}" in after
+            parts = []
+            for sel in before.split(","):
+                sel = sel.strip()
+                if not sel:
+                    continue
+                if sel == ":root":
+                    parts.append(".rp")
+                elif sel in ("html", "body"):
+                    parts.append(".rp")
+                else:
+                    parts.append(f".rp {sel}")
+            out.append(",".join(parts) + after)
+            if not has_close:
+                in_rule = True
+            continue
+
+        # Property lines inside a rule body
+        out.append(line)
+
+    return "\n".join(out)
 
 app = FastAPI(
     title="Snowflake to Databricks Migration Agent",
@@ -231,6 +308,180 @@ _SECRET_FIELDS = {
 
 PROGRESS_TOTAL = 9
 
+# Rich migration execution phases & tasks
+MIGRATION_PHASES = [
+    {
+        "name": "Connect to Snowflake",
+        "agent": "Discovery Agent",
+        "tasks": [
+            "Authenticate",
+            "Validate Credentials",
+            "Test Connection",
+        ],
+    },
+    {
+        "name": "Extract DDL",
+        "agent": "Discovery Agent",
+        "tasks": [
+            "Discover Schemas",
+            "Extract Tables",
+            "Extract Views",
+            "Extract Procedures",
+            "Extract Functions",
+            "Extract Streams & Tasks",
+            "Extract Stages & Pipes",
+            "Extract File Formats",
+            "Extract Policies & Sequences",
+        ],
+    },
+    {
+        "name": "Dependency Analysis",
+        "agent": "Dependency Agent",
+        "tasks": [
+            "Parse SQL",
+            "Build AST",
+            "Resolve References",
+            "Detect Cycles",
+            "Determine Execution Order",
+            "Generate Dependency Graph",
+        ],
+    },
+    {
+        "name": "Capability Analysis",
+        "agent": "Capability Agent",
+        "tasks": [
+            "Detect Unsupported Features",
+            "Detect JavaScript Procedures",
+            "Detect External Functions",
+            "Detect Dynamic SQL",
+            "Generate Capability Report",
+        ],
+    },
+    {
+        "name": "Translation",
+        "agent": "Translator Agent",
+        "tasks": [
+            "Translate Schemas",
+            "Translate Tables",
+            "Translate Views",
+            "Translate Functions",
+            "Translate Procedures",
+            "Apply Rule Engine",
+            "Convert Semi-Structured",
+            "Convert JavaScript",
+            "Regex Cleanup",
+            "Score Confidence",
+        ],
+    },
+    {
+        "name": "AI Verification",
+        "agent": "LLM Agent",
+        "tasks": [
+            "Prepare Prompt",
+            "Send to LLM",
+            "Receive Response",
+            "Apply Suggestions",
+            "Generate Confidence",
+        ],
+    },
+    {
+        "name": "Validation",
+        "agent": "Validator Agent",
+        "tasks": [
+            "Validate SQL Syntax",
+            "Validate Databricks Compatibility",
+            "Validate Dependencies",
+            "Validate Architecture",
+            "Semantic Validation",
+        ],
+    },
+    {
+        "name": "Self Healing",
+        "agent": "Critic Agent",
+        "tasks": [
+            "Detect Errors",
+            "Classify Errors",
+            "Choose Repair Strategy",
+            "Retry Translation",
+            "Validate Repair",
+        ],
+    },
+    {
+        "name": "Generate Report",
+        "agent": "Documentation Agent",
+        "tasks": [
+            "Generate Inventory",
+            "Generate Dependency Graph",
+            "Generate Statistics",
+            "Generate Recommendations",
+            "Generate Summary",
+            "Save Report",
+        ],
+    },
+]
+
+
+def _build_rich_progress(
+    phase: int = 0,
+    task: int = -1,
+    detail: str = "",
+    current_object: str = "",
+    current_schema: str = "",
+    current_database: str = "",
+    objects_completed: int = 0,
+    objects_total: int = 0,
+    elapsed: int = 0,
+    done: bool = False,
+    error: str = "",
+    log: list | None = None,
+    phases_state: list | None = None,
+) -> dict:
+    return {
+        "phase": phase,
+        "task": task,
+        "detail": detail,
+        "current_object": current_object,
+        "current_schema": current_schema,
+        "current_database": current_database,
+        "objects_completed": objects_completed,
+        "objects_total": objects_total,
+        "elapsed": elapsed,
+        "done": done,
+        "error": error,
+        "log": log or [],
+        "phases": phases_state or _init_phases_state(),
+    }
+
+
+def _init_phases_state() -> list[dict]:
+    return [
+        {
+            "name": p["name"],
+            "agent": p["agent"],
+            "status": "waiting",
+            "tasks": [{"name": t, "status": "waiting"} for t in p["tasks"]],
+        }
+        for p in MIGRATION_PHASES
+    ]
+
+
+def _set_phase(phases: list[dict], idx: int, status: str):
+    if 0 <= idx < len(phases):
+        phases[idx]["status"] = status
+
+
+def _set_task(phases: list[dict], phase_idx: int, task_idx: int, status: str):
+    if 0 <= phase_idx < len(phases):
+        tasks = phases[phase_idx]["tasks"]
+        if 0 <= task_idx < len(tasks):
+            tasks[task_idx]["status"] = status
+
+
+def _set_phase_tasks(phases: list[dict], phase_idx: int, status: str):
+    if 0 <= phase_idx < len(phases):
+        for t in phases[phase_idx]["tasks"]:
+            t["status"] = status
+
 def _strip(val: str | None) -> str:
     return val.strip() if isinstance(val, str) else val or ""
 
@@ -266,30 +517,53 @@ def _creds_hash(creds: dict) -> str:
     return hashlib.sha256(key.encode()).hexdigest()[:16]
 
 
+_ARCHITECTURAL_TYPES = {"pipe", "task", "file_format", "stream", "stage", "masking_policy", "row_access_policy", "sequence"}
+
+def _patch_summary(summary: dict | None, conversions: list) -> dict:
+    if summary is None:
+        return {"objects": 0, "success": 0, "manual_review": 0, "architectural": 0, "issues": 0, "failed": 0, "pass_rate": 0}
+    arch_count = sum(1 for c in conversions if c.get("object_type") in _ARCHITECTURAL_TYPES)
+    summary["architectural"] = summary.get("architectural", arch_count)
+    summary.setdefault("manual_review", 0)
+    summary.setdefault("issues", 0)
+    return summary
+
+
 def _build_summary(inventory, validation_results) -> dict:
+    total = len(validation_results)
+    auto_conv = 0
+    manual_review = 0
+    architectural = 0
+    issues = 0
+    failed = 0
+    for v in validation_results.values():
+        if v.status == "ERROR":
+            failed += 1
+        elif v.status == "ISSUE":
+            issues += 1
+        elif v.status == "ARCHITECTURAL CHANGE":
+            architectural += 1
+        elif v.status == "WARNING":
+            manual_review += 1
+        elif v.is_pass():
+            auto_conv += 1
+    pass_rate = round(auto_conv / total * 100) if total else 0
     seen = set()
-    unique_objects = []
+    tables = []
     for obj in inventory.all_objects:
         key = obj.name.lower()
         if key not in seen:
             seen.add(key)
-            unique_objects.append(obj)
-    total = len(unique_objects)
-    success = sum(1 for v in validation_results.values() if v.status in ("PASS", "WARNING"))
-    failed = sum(1 for v in validation_results.values() if v.status in ("ERROR", "ISSUE"))
-    pass_rate = round(success / total * 100) if total else 0
-    tables = []
-    for obj in unique_objects:
-        vr = validation_results.get(obj.name)
-        tables.append({
-            "name": obj.name,
-            "object_type": obj.object_type,
-            "source": str(obj.file_path) if obj.file_path else "",
-            "status": vr.status.lower() if vr else "unknown",
-            "raw_sql": obj.raw_sql or "",
-            "converted_sql": obj.converted_sql or "",
-        })
-    return {"objects": total, "success": success, "failed": failed, "pass_rate": pass_rate, "tables": tables}
+            vr = validation_results.get(obj.name)
+            tables.append({
+                "name": obj.name,
+                "object_type": obj.object_type,
+                "source": str(obj.file_path) if obj.file_path else "",
+                "status": vr.status.lower() if vr else "unknown",
+                "raw_sql": obj.raw_sql or "",
+                "converted_sql": obj.converted_sql or "",
+            })
+    return {"objects": total, "success": auto_conv, "manual_review": manual_review, "architectural": architectural, "issues": issues, "failed": failed, "pass_rate": pass_rate, "tables": tables}
 
 def _build_conversions(inventory) -> list[dict]:
     result = []
@@ -318,6 +592,217 @@ def _build_conversions(inventory) -> list[dict]:
 
 def _build_progress(step: int, total: int, message: str, done: bool = False, error: str = "") -> dict:
     return {"step": step, "total": total, "message": message, "done": done, "error": error}
+
+DEPLOY_PHASES = [
+    "Initializing Deployment",
+    "Infrastructure Setup",
+    "Tables",
+    "Views",
+    "Functions",
+    "Procedures",
+    "Finalizing",
+]
+
+def _build_deploy_progress(
+    phase: str = "",
+    phase_num: int = 0,
+    total_phases: int = len(DEPLOY_PHASES),
+    object_idx: int = 0,
+    total_objects: int = 0,
+    message: str = "",
+    current_object: str = "",
+    current_sql: str = "",
+    elapsed: int = 0,
+    done: bool = False,
+    error: str = "",
+    activity_log: list | None = None,
+) -> dict:
+    return {
+        "phase": phase,
+        "phase_num": phase_num,
+        "total_phases": total_phases,
+        "object_idx": object_idx,
+        "total_objects": total_objects,
+        "message": message,
+        "current_object": current_object,
+        "current_sql": current_sql,
+        "elapsed": elapsed,
+        "done": done,
+        "error": error,
+        "activity_log": activity_log or [],
+    }
+
+_DEFAULT_DEPLOY_PROGRESS = _build_deploy_progress(message="Starting deployment...")
+
+def _deploy_cancelled(run_id: str) -> bool:
+    s = _get_run(run_id)
+    return s is not None and s.get("deploy_cancel", False)
+
+
+def _run_deploy_background(run_id: str, mode: str):
+    """Run deployment in a background thread, updating deploy_progress."""
+    run = _get_run(run_id)
+    if not run:
+        return
+
+    run["deploy_progress"] = _build_deploy_progress(message="Initializing...")
+    _store_run(run_id, run)
+    start_time = time.time()
+    log_entries = []
+
+    def progress_callback(action: str, data: dict):
+        nonlocal log_entries
+        current_run = _get_run(run_id)
+        if current_run is None:
+            return
+
+        # Check for cancellation
+        if _deploy_cancelled(run_id):
+            raise KeyboardInterrupt("Deployment cancelled by user")
+
+        elapsed = int(time.time() - start_time)
+        elapsed = int(time.time() - start_time)
+        prog = current_run.get("deploy_progress", {}) or {}
+        if action == "phase":
+            prog.update({
+                "phase": data.get("name", ""),
+                "phase_num": data.get("num", 0),
+                "total_phases": data.get("total", len(DEPLOY_PHASES)),
+            })
+        elif action == "deploying":
+            prog.update({
+                "message": f"Creating {data.get('type', 'object')}: {data.get('name', '')}",
+                "current_object": data.get("name", ""),
+                "current_sql": data.get("sql", ""),
+                "object_idx": data.get("idx", 0),
+                "total_objects": data.get("total", 0),
+            })
+        elif action == "result":
+            prog.update({
+                "object_idx": data.get("idx", 0),
+                "total_objects": data.get("total", 0),
+            })
+        elif action == "log":
+            entry = {
+                "time": time.strftime("%H:%M:%S"),
+                "message": data.get("message", ""),
+                "type": data.get("type", "info"),
+            }
+            log_entries.append(entry)
+            prog["activity_log"] = list(log_entries[-200:])
+        prog["elapsed"] = elapsed
+        current_run["deploy_progress"] = prog
+        _store_run(run_id, current_run)
+
+    try:
+        run = _restore_creds(run)
+        creds = {
+            "db_hostname": run.get("db_hostname", ""),
+            "db_http_path": run.get("db_http_path", ""),
+            "db_token": run.get("db_token", ""),
+            "db_catalog": run.get("db_catalog"),
+            "db_schema": run.get("db_schema"),
+        }
+
+        objects = []
+        skipped = []
+        for conv in run.get("conversions", []):
+            review_status = conv.get("review_status", "pending_review")
+            if review_status != "approved":
+                skipped.append({
+                    "name": conv.get("name", ""),
+                    "object_type": conv.get("object_type", ""),
+                    "status": "skipped",
+                    "message": f"Skipped — review status: {review_status}",
+                })
+                continue
+            objects.append({
+                "name": conv.get("name", ""),
+                "object_type": conv.get("object_type", ""),
+                "converted_sql": conv.get("approved_sql") or conv.get("converted_sql", ""),
+                "raw_sql": conv.get("raw_sql", ""),
+            })
+
+        from agents.deployment_agent import DeploymentAgent
+        agent = DeploymentAgent()
+        is_dry = mode == "dry_run"
+        catalog_ddl = list(run.get("catalog_ddl") or [])
+        schema_ddl = list(run.get("schema_ddl") or [])
+
+        if not schema_ddl:
+            for conv in run.get("conversions", []):
+                if conv.get("object_type") == "schema":
+                    sql = conv.get("approved_sql") or conv.get("converted_sql", "")
+                    if sql:
+                        schema_ddl.append(sql)
+
+        target_cat = (creds.get("db_catalog") or "").strip()
+        if target_cat and catalog_ddl:
+            catalog_ddl = [f"CREATE CATALOG IF NOT EXISTS {target_cat}"]
+            seen = set()
+            rewritten = []
+            for s in schema_ddl:
+                parts = s.replace("CREATE SCHEMA IF NOT EXISTS ", "").split(".")
+                if len(parts) >= 2:
+                    ns = f"{target_cat}.{parts[-1]}"
+                    if ns not in seen:
+                        rewritten.append(f"CREATE SCHEMA IF NOT EXISTS {ns}")
+                        seen.add(ns)
+            schema_ddl = rewritten
+
+        results = agent.deploy(objects, creds, dry_run=is_dry,
+                               catalog_ddl=catalog_ddl or None, schema_ddl=schema_ddl or None,
+                               progress_callback=progress_callback)
+
+        deploy_results = [
+            {
+                "object": r.object_name,
+                "type": r.object_type,
+                "status": "dry_run" if is_dry and r.success else "success" if r.success else "error",
+                "message": r.error or (f"Would deploy ({r.duration_ms}ms simulated)" if is_dry else f"OK ({r.duration_ms}ms)"),
+            }
+            for r in results
+        ]
+        deploy_results.extend(skipped)
+
+        run["deploy_results"] = deploy_results
+        elapsed = int(time.time() - start_time)
+        prog = _build_deploy_progress(
+            phase="Complete",
+            phase_num=len(DEPLOY_PHASES),
+            total_phases=len(DEPLOY_PHASES),
+            object_idx=len(objects) + len(skipped),
+            total_objects=max(len(objects) + len(skipped), 1),
+            message="Deployment complete!",
+            done=True,
+            elapsed=elapsed,
+            activity_log=log_entries[-200:],
+        )
+        run["deploy_progress"] = prog
+        _store_run(run_id, run)
+
+    except KeyboardInterrupt:
+        run = _get_run(run_id)
+        if run:
+            run["deploy_progress"] = _build_deploy_progress(
+                message="Deployment cancelled",
+                done=True,
+                error="cancelled",
+                elapsed=int(time.time() - start_time),
+                activity_log=log_entries[-200:],
+            )
+            _store_run(run_id, run)
+    except Exception as e:
+        run = _get_run(run_id)
+        if run:
+            run["deploy_progress"] = _build_deploy_progress(
+                message=f"Deployment failed: {e}",
+                done=True,
+                error=str(e),
+                elapsed=int(time.time() - start_time),
+                activity_log=log_entries[-200:],
+            )
+            _store_run(run_id, run)
 
 
 def _check_cancel(run_id: str) -> bool:
@@ -484,15 +969,60 @@ def _rewrite_names(orchestrator, creds: dict):
         obj.converted_sql = sql
 
 def _run_migration(run_id: str, creds: dict):
-    """Run migration in a background thread, updating progress in _runs."""
+    """Run migration in a background thread, updating rich progress in _runs."""
 
-    def progress(step, total, msg):
+    start_time = time.time()
+    log_entries = []
+    ph_state = _init_phases_state()
+
+    def _log(level: str, msg: str):
+        ts = time.strftime("%H:%M:%S")
+        log_entries.append({"time": ts, "level": level, "message": msg})
+
+    def _emit(detail: str = "", ph: int = 0, tk: int = -1,
+              obj: str = "", schema: str = "", db: str = "",
+              obj_done: int = 0, obj_total: int = 0):
         if _check_cancel(run_id):
             raise KeyboardInterrupt("Cancelled by user")
         s = _get_run(run_id)
-        if s:
-            s["progress"] = _build_progress(step, total, msg)
-            _store_run(run_id, s)
+        if not s:
+            return
+        elapsed = int(time.time() - start_time) if start_time else 0
+        s["progress"] = _build_rich_progress(
+            phase=ph, task=tk, detail=detail,
+            current_object=obj, current_schema=schema, current_database=db,
+            objects_completed=obj_done, objects_total=obj_total,
+            elapsed=elapsed, log=list(log_entries),
+            phases_state=ph_state,
+        )
+        _store_run(run_id, s)
+
+    def _phase_start(idx: int):
+        _set_phase(ph_state, idx, "running")
+        _emit(detail=ph_state[idx]["name"], ph=idx)
+
+    def _phase_done(idx: int):
+        _set_phase(ph_state, idx, "completed")
+        _set_phase_tasks(ph_state, idx, "completed")
+        name = ph_state[idx]["name"]
+        _log("success", f"{name} complete")
+        _emit(detail=f"{name} complete", ph=idx)
+
+    def _task_start(ph: int, tk: int, detail: str = ""):
+        _set_phase(ph_state, ph, "running")
+        _set_task(ph_state, ph, tk, "running")
+        _log("info", f"{detail}")
+        _emit(detail=detail, ph=ph, tk=tk)
+
+    def _task_done(ph: int, tk: int):
+        _set_task(ph_state, ph, tk, "completed")
+
+    def _task_skip(ph: int, tk: int):
+        _set_task(ph_state, ph, tk, "skipped")
+
+    def _log_emit(level: str, msg: str):
+        _log(level, msg)
+        _emit(detail=msg, ph=0, tk=-1)
 
     run_data = _get_run(run_id) or {}
     completed = set(run_data.get("completed_steps", []))
@@ -507,7 +1037,16 @@ def _run_migration(run_id: str, creds: dict):
 
     sf = None
     try:
-        progress(1, PROGRESS_TOTAL, "Connecting to Snowflake...")
+        _phase_start(0)
+        for ti in range(3):
+            _task_start(0, ti, MIGRATION_PHASES[0]["tasks"][ti])
+            if ti == 0:
+                _log_emit("info", "Connecting to Snowflake account…")
+            elif ti == 1:
+                _log_emit("info", "Validating connection credentials…")
+            elif ti == 2:
+                pass
+            _task_done(0, ti)
         _check_cancel_raise(run_id)
         sf = SnowflakeConnector(
             account=creds["sf_account"],
@@ -519,46 +1058,79 @@ def _run_migration(run_id: str, creds: dict):
             schema=creds.get("sf_schema") or None,
         )
         sf.test_connection()
+        _log_emit("success", "Connected to Snowflake successfully")
+        _phase_done(0)
 
         if "extract_ddl" not in completed:
-            progress(2, PROGRESS_TOTAL, "Extracting DDL from Snowflake...")
+            _phase_start(1)
             tmp_dir = _RUNS_DIR / run_id
+            _task_start(1, 0, "Discovering schemas…")
 
             ch = _creds_hash(creds)
             project_tree = database.get_cached_ddl(ch)
             if project_tree and not refresh:
-                progress(2, PROGRESS_TOTAL, "Using cached DDL (same Snowflake config)...")
+                _log_emit("info", "Using cached DDL (same Snowflake config)")
+                _task_done(1, 0)
+                for ti2 in range(1, 9):
+                    _task_skip(1, ti2)
+                _log_emit("info", "Skipped extraction — using cache")
             else:
+                _task_done(1, 0)
+                obj_types = [
+                    ("Tables", 1), ("Views", 2), ("Procedures", 3),
+                    ("Functions", 4), ("Streams & Tasks", 5),
+                    ("Stages & Pipes", 6), ("File Formats", 7),
+                    ("Policies & Sequences", 8),
+                ]
                 def on_extract_progress(db, schema, current, total):
                     s = _get_run(run_id)
                     if s and s.get("cancel"):
                         raise KeyboardInterrupt("Cancelled by user")
                     if s:
                         pct = round(current / max(total, 1) * 100)
-                        s["progress"] = _build_progress(2, PROGRESS_TOTAL, f"Extracting {db}.{schema}... ({pct}%)")
-                        _store_run(run_id, s)
-
+                        _emit(
+                            detail=f"Extracting {db}.{schema}… ({pct}%)",
+                            ph=1, tk=0, schema=schema, db=db,
+                            obj_done=current, obj_total=total,
+                        )
                 result = sf.extract_project(on_progress=on_extract_progress)
                 project_tree = result["tree"]
+                for ot_name, ot_idx in obj_types:
+                    _task_start(1, ot_idx, f"Extracting {ot_name}…")
+                    _task_done(1, ot_idx)
                 database.cache_ddl(ch, project_tree)
+            _phase_done(1)
             track_step("extract_ddl")
 
         _check_cancel_raise(run_id)
         if "project_load" not in completed:
-            progress(3, PROGRESS_TOTAL, "Loading project & analyzing dependencies...")
+            _phase_start(2)
+            _task_start(2, 0, "Parsing SQL files…")
+            _task_done(2, 0)
             output_dir = tmp_dir / "output"
             orchestrator = MigrationOrchestrator(
                 project_path="",
                 output_dir=str(output_dir),
                 project_tree=project_tree,
             )
+            orchestrator.target_cloud = creds.get("target_cloud", "aws")
             orchestrator.set_snowflake_connector(sf)
             orchestrator.step_project_loader()
-            track_step("project_load")
+            _log_emit("info", "Project inventory loaded")
+            _task_start(2, 1, "Building AST…")
+            _task_done(2, 1)
+            _task_start(2, 2, "Resolving references…")
+            _task_done(2, 2)
 
-        _check_cancel_raise(run_id)
-        if "dependency_analysis" not in completed:
             orchestrator.step_dependency_analysis()
+            _task_start(2, 3, "Detecting cycles…")
+            _task_done(2, 3)
+            _task_start(2, 4, "Determining execution order…")
+            _task_done(2, 4)
+            _task_start(2, 5, "Generating dependency graph…")
+            _task_done(2, 5)
+            _phase_done(2)
+            track_step("project_load")
             track_step("dependency_analysis")
 
         if "storage_discovery" not in completed:
@@ -569,45 +1141,102 @@ def _run_migration(run_id: str, creds: dict):
             orchestrator.step_plan()
             track_step("plan")
 
+        if "platform_analysis" not in completed:
+            orchestrator.step_platform_analysis()
+            track_step("platform_analysis")
+
         if "capability_check" not in completed:
-            progress(4, PROGRESS_TOTAL, "Analyzing capabilities...")
+            _phase_start(3)
+            for ti in range(5):
+                _task_start(3, ti, MIGRATION_PHASES[3]["tasks"][ti])
+                _task_done(3, ti)
             orchestrator.step_capability_check()
+            _phase_done(3)
             track_step("capability_check")
 
         if "translation" not in completed:
-            progress(5, PROGRESS_TOTAL, "Converting schemas & translating SQL...")
+            _phase_start(4)
+            obj_count = len(orchestrator.inventory.all_objects) if orchestrator.inventory else 0
+
+            _task_start(4, 0, "Translating schemas…")
             orchestrator.step_sqlglot_transpile()
+            _task_done(4, 0)
+
+            _task_start(4, 1, "Translating tables…")
+            _task_done(4, 1)
+
+            _task_start(4, 2, "Translating views…")
+            _task_done(4, 2)
+
+            _task_start(4, 3, "Translating functions…")
+            _task_done(4, 3)
+
+            _task_start(4, 4, "Translating procedures…")
             orchestrator.step_rule_engine()
+            _task_done(4, 4)
+
+            _task_start(4, 5, "Applying rule engine…")
+            _task_done(4, 5)
+
+            _task_start(4, 6, "Converting semi-structured data…")
             orchestrator.step_semi_structured()
+            _task_done(4, 6)
+
+            _task_start(4, 7, "Converting JavaScript UDFs…")
             orchestrator.step_js_conversion()
+            _task_done(4, 7)
+
+            _task_start(4, 8, "Regex cleanup…")
             orchestrator.step_regex_cleanup()
+            _task_done(4, 8)
+
+            _task_start(4, 9, "Scoring confidence…")
             orchestrator.step_confidence_scoring()
+            _task_done(4, 9)
+
+            _phase_done(4)
             track_step("translation")
 
         _check_cancel_raise(run_id)
         if "llm_verify" not in completed:
-            progress(6, PROGRESS_TOTAL, "LLM verification & validation...")
+            _phase_start(5)
+            for ti in range(5):
+                _task_start(5, ti, MIGRATION_PHASES[5]["tasks"][ti])
+                _task_done(5, ti)
             orchestrator.step_llm_verify()
+            _phase_done(5)
             track_step("llm_verify")
 
         _check_cancel_raise(run_id)
         if "validation" not in completed:
-            progress(7, PROGRESS_TOTAL, "Validating conversions...")
+            _phase_start(6)
             _rewrite_names(orchestrator, creds)
+            for ti in range(5):
+                _task_start(6, ti, MIGRATION_PHASES[6]["tasks"][ti])
+                _task_done(6, ti)
             orchestrator.step_validation()
+            _phase_done(6)
 
         _check_cancel_raise(run_id)
         if "self_heal" not in completed:
-            progress(8, PROGRESS_TOTAL, "Self-healing failed conversions...")
+            _phase_start(7)
+            for ti in range(5):
+                _task_start(7, ti, MIGRATION_PHASES[7]["tasks"][ti])
+                _task_done(7, ti)
             orchestrator.step_llm_review()
             orchestrator.step_self_healing()
+            _phase_done(7)
             track_step("self_heal")
 
         _check_cancel_raise(run_id)
         artifacts = {}
         if "documentation" not in completed:
-            progress(9, PROGRESS_TOTAL, "Generating report...")
+            _phase_start(8)
+            for ti in range(6):
+                _task_start(8, ti, MIGRATION_PHASES[8]["tasks"][ti])
+                _task_done(8, ti)
             artifacts = orchestrator.step_documentation()
+            _phase_done(8)
             track_step("documentation")
 
         report_path = artifacts.get("report")
@@ -661,10 +1290,33 @@ def _run_migration(run_id: str, creds: dict):
                             if new_schema not in seen:
                                 schema_ddl.append(f"CREATE SCHEMA IF NOT EXISTS {new_schema}")
                                 seen.add(new_schema)
+            platform_analysis_list = []
+            if orchestrator.platform_analyses:
+                for plan_item in orchestrator.platform_analyses:
+                    a = plan_item.analysis
+                    platform_analysis_list.append({
+                        "obj_name": a.obj_name,
+                        "object_type": a.object_type,
+                        "status": a.status,
+                        "recommended_target": a.recommended_target,
+                        "automation_percentage": a.automation_percentage,
+                        "notes": a.notes,
+                        "additional_services": a.additional_services,
+                        "manual_steps": a.manual_steps,
+                        "converted_sql": a.converted_sql,
+                        "deployment_sql": plan_item.deployment_sql,
+                        "deployment_artifacts": plan_item.deployment_artifacts,
+                    })
             s.update({
                 "done": True,
                 "completed_steps": list(completed | {"all"}),
-                "progress": _build_progress(9, PROGRESS_TOTAL, "Migration complete!", done=True),
+                "progress": _build_rich_progress(
+                    phase=len(MIGRATION_PHASES)-1, task=0,
+                    detail="Migration complete!",
+                    elapsed=int(time.time() - start_time),
+                    done=True, log=list(log_entries),
+                    phases_state=ph_state,
+                ),
                 "conversions": conversions,
                 "catalog_ddl": catalog_ddl,
                 "schema_ddl": schema_ddl,
@@ -674,6 +1326,7 @@ def _run_migration(run_id: str, creds: dict):
                 "confidence_scores": confidence,
                 "plan": plan,
                 "storage_report": storage_data,
+                "platform_analyses": platform_analysis_list,
                 "error": None,
                 "sf_account": creds.get("sf_account", ""),
                 "sf_user": creds.get("sf_user", ""),
@@ -700,7 +1353,11 @@ def _run_migration(run_id: str, creds: dict):
         if s:
             s["done"] = True
             s["error"] = "Migration cancelled by user."
-            s["progress"] = _build_progress(0, PROGRESS_TOTAL, "Cancelled", done=True, error="Cancelled")
+            s["progress"] = _build_rich_progress(
+                done=True, error="Cancelled", log=list(log_entries),
+                elapsed=int(time.time() - start_time) if start_time else 0,
+                phases_state=ph_state,
+            )
             _store_run(run_id, s)
         return False
     except Exception as e:
@@ -708,7 +1365,11 @@ def _run_migration(run_id: str, creds: dict):
         if s:
             s["done"] = True
             s["error"] = str(e)
-            s["progress"] = _build_progress(0, PROGRESS_TOTAL, "Failed", done=True, error=str(e))
+            s["progress"] = _build_rich_progress(
+                done=True, error=str(e), log=list(log_entries),
+                elapsed=int(time.time() - start_time) if start_time else 0,
+                phases_state=ph_state,
+            )
             _store_run(run_id, s)
         return False
     finally:
@@ -733,7 +1394,7 @@ async def retry_conversion(run_id: str):
     # Clear error before redirect so progress page doesn't show stale failure
     run["done"] = False
     run["error"] = None
-    run["progress"] = _build_progress(0, 9, "Re-running conversion from cached DDL...")
+    run["progress"] = _build_rich_progress(detail="Re-running from cached DDL...")
     _store_run(run_id, run)
 
     threading.Thread(target=_rerun_conversion, args=(run_id,), daemon=True).start()
@@ -745,18 +1406,42 @@ def _rerun_conversion(run_id: str):
     if not run:
         return
 
-    def progress(step, total, msg):
-        s = _get_run(run_id)
-        if s:
-            s["progress"] = _build_progress(step, total, msg)
-            _store_run(run_id, s)
+    start_time = time.time()
+    log_entries = []
+    ph_state = _init_phases_state()
 
-    try:
+    def _log(level: str, msg: str):
+        log_entries.append({"time": time.strftime("%H:%M:%S"), "level": level, "message": msg})
+
+    def _emit(detail: str = "", ph: int = 0, tk: int = -1):
         s = _get_run(run_id)
-        s["progress"] = _build_progress(0, 9, "Re-running conversion from cached DDL...")
+        if not s:
+            return
+        s["progress"] = _build_rich_progress(
+            phase=ph, task=tk, detail=detail,
+            elapsed=int(time.time() - start_time),
+            log=list(log_entries), phases_state=ph_state,
+        )
         _store_run(run_id, s)
 
-        progress(3, 9, "Loading project from cached DDL...")
+    def _phase_done(idx: int):
+        _set_phase(ph_state, idx, "completed")
+        _set_phase_tasks(ph_state, idx, "completed")
+        _log("success", f"{ph_state[idx]['name']} complete")
+        _emit(detail=f"{ph_state[idx]['name']} complete", ph=idx)
+
+    def _task_done(ph: int, tk: int):
+        _set_task(ph_state, ph, tk, "completed")
+        _emit(detail=ph_state[ph]["tasks"][tk] if tk < len(ph_state[ph]["tasks"]) else "", ph=ph, tk=tk)
+
+    try:
+        # Phase 2: Dependency Analysis (skip connection + extraction)
+        _set_phase(ph_state, 0, "completed")
+        _set_phase_tasks(ph_state, 0, "completed")
+        _set_phase(ph_state, 1, "completed")
+        _set_phase_tasks(ph_state, 1, "completed")
+        _log("info", "Using cached DDL — skipping connection and extraction")
+
         tmp_dir = Path(run["tmp_dir"])
         ch = _creds_hash(run)
         project_tree = database.get_cached_ddl(ch)
@@ -767,23 +1452,39 @@ def _rerun_conversion(run_id: str):
             output_dir=str(output_dir),
             project_tree=project_tree,
         )
-        orchestrator.step_project_loader()
+        orchestrator.target_cloud = creds.get("target_cloud", "aws")
 
-        progress(4, 9, "Analyzing capabilities...")
+        _set_phase(ph_state, 2, "running")
+        _log("info", "Loading project from cached DDL…")
+        orchestrator.step_project_loader()
+        _log("info", "Analyzing dependencies…")
         orchestrator.step_dependency_analysis()
+        _phase_done(2)
+
+        _set_phase(ph_state, 3, "completed")
+        _set_phase_tasks(ph_state, 3, "completed")
+        _log("info", "Capability analysis skipped (cached)")
         orchestrator.step_capability_check()
-        progress(5, 9, "Converting schemas & translating SQL...")
+
+        _set_phase(ph_state, 4, "running")
+        _log("info", "Translating schemas & SQL…")
         orchestrator.step_sqlglot_transpile()
         orchestrator.step_rule_engine()
         orchestrator.step_semi_structured()
         orchestrator.step_js_conversion()
         orchestrator.step_regex_cleanup()
+        _phase_done(4)
+
+        _set_phase(ph_state, 5, "completed")
+        _set_phase_tasks(ph_state, 5, "completed")
         orchestrator.step_llm_verify()
 
-        progress(6, 9, "Validating conversions...")
+        _set_phase(ph_state, 6, "completed")
+        _set_phase_tasks(ph_state, 6, "completed")
         orchestrator.step_validation()
 
-        progress(7, 9, "Generating report...")
+        _set_phase(ph_state, 8, "running")
+        _log("info", "Generating report…")
         artifacts = orchestrator.step_documentation()
 
         report_path = artifacts.get("report")
@@ -799,9 +1500,16 @@ def _rerun_conversion(run_id: str):
 
         s = _get_run(run_id)
         if s:
+            _phase_done(8)
             s.update({
                 "done": True,
-                "progress": _build_progress(9, 9, "Conversion complete!", done=True),
+                "progress": _build_rich_progress(
+                    phase=len(MIGRATION_PHASES)-1, task=0,
+                    detail="Conversion complete!",
+                    elapsed=int(time.time() - start_time),
+                    done=True, log=list(log_entries),
+                    phases_state=ph_state,
+                ),
                 "conversions": conversions,
                 "summary": summary,
                 "report": report_text,
@@ -815,7 +1523,11 @@ def _rerun_conversion(run_id: str):
         if s:
             s["done"] = True
             s["error"] = str(e)
-            s["progress"] = _build_progress(0, 9, "Failed", done=True, error=str(e))
+            s["progress"] = _build_rich_progress(
+                done=True, error=str(e), log=list(log_entries),
+                elapsed=int(time.time() - start_time),
+                phases_state=ph_state,
+            )
             _store_run(run_id, s)
 
 
@@ -847,7 +1559,7 @@ async def resume_migration(run_id: str):
     }
     run["done"] = False
     run["error"] = None
-    run["progress"] = _build_progress(0, PROGRESS_TOTAL, "Resuming migration...")
+    run["progress"] = _build_rich_progress(detail="Resuming migration...")
     _store_run(run_id, run)
 
     threading.Thread(target=_run_migration, args=(run_id, creds), daemon=True).start()
@@ -922,6 +1634,7 @@ async def get_project_credentials(project_id: str):
 async def save_project(
     name: str = Form(...),
     description: str = Form(""),
+    target_cloud: str = Form("aws"),
     sf_account: str = Form(...),
     sf_user: str = Form(...),
     sf_password: str = Form(...),
@@ -940,6 +1653,7 @@ async def save_project(
     if existing:
         existing.update({
             "description": _strip(description),
+            "target_cloud": _strip(target_cloud),
             "sf_account": _strip(sf_account), "sf_user": _strip(sf_user), "sf_password": _strip(sf_password),
             "sf_warehouse": _strip(sf_warehouse), "sf_role": _strip(sf_role), "sf_database": _strip(sf_database),
             "sf_schema": _strip(sf_schema),
@@ -951,6 +1665,7 @@ async def save_project(
     pid = database.next_project_id()
     project = {
         "id": pid, "name": _strip(name), "description": _strip(description),
+        "target_cloud": _strip(target_cloud),
         "sf_account": _strip(sf_account), "sf_user": _strip(sf_user), "sf_password": _strip(sf_password),
         "sf_warehouse": _strip(sf_warehouse), "sf_role": _strip(sf_role), "sf_database": _strip(sf_database),
         "sf_schema": _strip(sf_schema),
@@ -971,6 +1686,7 @@ async def update_project(
     project_id: str = Form(...),
     name: str = Form(...),
     description: str = Form(""),
+    target_cloud: str = Form("aws"),
     sf_account: str = Form(...),
     sf_user: str = Form(...),
     sf_password: str = Form(...),
@@ -990,6 +1706,7 @@ async def update_project(
     p = _restore_creds(p)
     p.update({
         "description": _strip(description),
+        "target_cloud": _strip(target_cloud),
         "sf_account": _strip(sf_account), "sf_user": _strip(sf_user), "sf_password": _strip(sf_password),
         "sf_warehouse": _strip(sf_warehouse), "sf_role": _strip(sf_role), "sf_database": _strip(sf_database),
         "sf_schema": _strip(sf_schema),
@@ -1020,6 +1737,7 @@ async def start_project_migration(project_id: str = Form(...), refresh: str = Fo
     tmp_dir = _RUNS_DIR / run_id
     tmp_dir.mkdir(parents=True, exist_ok=True)
     creds = {
+        "target_cloud": p.get("target_cloud", "aws"),
         "sf_account": p.get("sf_account", ""),
         "sf_user": p.get("sf_user", ""),
         "sf_password": p.get("sf_password", ""),
@@ -1037,7 +1755,7 @@ async def start_project_migration(project_id: str = Form(...), refresh: str = Fo
         "tmp_dir": str(tmp_dir),
         "done": False,
         "error": None,
-        "progress": _build_progress(0, PROGRESS_TOTAL, "Starting migration..."),
+        "progress": _build_rich_progress(detail="Starting migration..."),
         "conversions": [],
         "summary": None,
         "report": "",
@@ -1069,6 +1787,7 @@ async def migrate_from_snowflake(
     db_token: str = Form(None),
     db_catalog: str = Form(None),
     db_schema: str = Form(None),
+    target_cloud: str = Form("aws"),
 ):
     run_id = uuid.uuid4().hex[:12]
     tmp_dir = _RUNS_DIR / run_id
@@ -1080,13 +1799,14 @@ async def migrate_from_snowflake(
         "sf_schema": _strip(sf_schema),
         "db_hostname": _strip(db_hostname), "db_http_path": _strip(db_http_path), "db_token": _strip(db_token),
         "db_catalog": _strip(db_catalog), "db_schema": _strip(db_schema),
+        "target_cloud": _strip(target_cloud),
     }
 
     _store_run(run_id, {
         "tmp_dir": str(tmp_dir),
         "done": False,
         "error": None,
-        "progress": _build_progress(0, PROGRESS_TOTAL, "Starting migration..."),
+        "progress": _build_rich_progress(detail="Starting migration..."),
         "conversions": [],
         "summary": None,
         "report": "",
@@ -1126,7 +1846,7 @@ async def migrate_from_file(file: UploadFile = File(...)):
         orchestrator = MigrationOrchestrator(project_path=str(extract_dir), output_dir=str(output_dir))
         artifacts = orchestrator.run()
 
-        report = output_dir / "reports" / "migration_report.txt"
+        report = output_dir / "reports" / "migration_report.html"
         report_text = report.read_text() if report.exists() else ""
 
         return _tr("results.html", {
@@ -1159,6 +1879,16 @@ async def cancel_run(run_id: str):
     return JSONResponse({"ok": True})
 
 
+@app.post("/api/deploy-cancel/{run_id}")
+async def cancel_deploy(run_id: str):
+    run = _get_run(run_id)
+    if not run:
+        return JSONResponse({"error": "Not found"}, status_code=404)
+    run["deploy_cancel"] = True
+    _store_run(run_id, run)
+    return JSONResponse({"ok": True})
+
+
 # ═══════════════════════════════════════════════════════════════════
 # Progress page + polling API
 # ═══════════════════════════════════════════════════════════════════
@@ -1180,12 +1910,11 @@ async def progress_page(run_id: str):
             })
         report_text = run.get("report", "") or ""
         conversions = _enrich_conversions(run.get("conversions", []) or [])
-        if conversions and "--- Original (Snowflake) ---" not in report_text:
-            report_text += _sql_appendix(conversions)
+        summary = _patch_summary(run.get("summary"), conversions)
         return _tr("results.html", {
             "run_id": run_id, "deploy_allowed": run.get("deploy_allowed", False),
             "conversions": conversions, "report": report_text,
-            "summary": run.get("summary"), "deploy_results": run.get("deploy_results"), "error": None,
+            "summary": summary, "deploy_results": run.get("deploy_results"), "error": None,
         })
     return _tr("progress.html", {"run_id": run_id})
 
@@ -1194,12 +1923,25 @@ async def get_progress(run_id: str):
     run = _get_run(run_id)
     if not run:
         return JSONResponse({"error": "Not found"}, status_code=404)
+    prog = run.get("progress")
+    if not prog or "phases" not in prog:
+        prog = _build_rich_progress(detail="Starting...", phases_state=_init_phases_state())
     return JSONResponse({
         "done": run.get("done", False),
-        "progress": run.get("progress", _build_progress(0, PROGRESS_TOTAL, "Starting...")),
+        "progress": prog,
         "error": run.get("error"),
         "cancel": run.get("cancel", False),
     })
+
+
+@app.get("/api/deploy-progress/{run_id}")
+async def get_deploy_progress(run_id: str):
+    run = _get_run(run_id)
+    if not run:
+        return JSONResponse({"error": "Not found"}, status_code=404)
+    prog = run.get("deploy_progress") or _build_deploy_progress()
+    prog["cancelled"] = run.get("deploy_cancel", False)
+    return JSONResponse(prog)
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -1207,7 +1949,7 @@ async def get_progress(run_id: str):
 # ═══════════════════════════════════════════════════════════════════
 
 @app.get("/results/{run_id}", response_class=HTMLResponse)
-async def get_results(run_id: str):
+async def get_results(run_id: str, deploying: str = "0"):
     run = _get_run(run_id)
     if not run:
         return _tr("results.html", {
@@ -1218,18 +1960,20 @@ async def get_results(run_id: str):
 
     report_text = run.get("report", "") or ""
     conversions = _enrich_conversions(run.get("conversions", []) or [])
-    sql_dump = ""
-    if conversions and "--- Original (Snowflake) ---" not in report_text:
-        sql_dump = _sql_appendix(conversions)
-        report_text += sql_dump
 
+    deploy_progress = run.get("deploy_progress") or {}
+    is_deploying = deploying == "1" or (deploy_progress.get("done") is False)
+
+    summary = _patch_summary(run.get("summary"), conversions)
     ctx = {
         "run_id": run_id,
         "run": run,
+        "deploying": is_deploying,
         "deploy_allowed": run.get("deploy_allowed", False),
         "conversions": conversions,
         "report": report_text,
-        "summary": run.get("summary"),
+        "report_body": _report_body(report_text),
+        "summary": summary,
         "deploy_results": run.get("deploy_results"),
         "error": run.get("error"),
         "storage_report": run.get("storage_report"),
@@ -1240,6 +1984,41 @@ async def get_results(run_id: str):
 
     ctx["error"] = None
     return _tr("results.html", ctx)
+
+
+@app.get("/api/report/{run_id}/view")
+async def view_report(run_id: str):
+    run = _get_run(run_id)
+    if not run:
+        return JSONResponse({"error": "Run not found"}, status_code=404)
+    report_text = run.get("report", "") or ""
+    if not report_text:
+        return JSONResponse({"error": "No report generated"}, status_code=404)
+    return HTMLResponse(
+        content=report_text,
+        status_code=200,
+        headers={
+            "Content-Type": "text/html; charset=utf-8",
+        },
+    )
+
+
+@app.get("/api/report/{run_id}/download")
+async def download_report(run_id: str):
+    run = _get_run(run_id)
+    if not run:
+        return JSONResponse({"error": "Run not found"}, status_code=404)
+    report_text = run.get("report", "") or ""
+    if not report_text:
+        return JSONResponse({"error": "No report generated"}, status_code=404)
+    return HTMLResponse(
+        content=report_text,
+        status_code=200,
+        headers={
+            "Content-Type": "text/html; charset=utf-8",
+            "Content-Disposition": f"attachment; filename=migration_report_{run_id}.html",
+        },
+    )
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -1769,111 +2548,11 @@ async def deploy_run(run_id: str, mode: str = Form("deploy")):
     if mode == "skip":
         return RedirectResponse(url=f"/results/{run_id}", status_code=302)
 
-    try:
-        run = _restore_creds(run)
-        creds = {
-            "db_hostname": run.get("db_hostname", ""),
-            "db_http_path": run.get("db_http_path", ""),
-            "db_token": run.get("db_token", ""),
-            "db_catalog": run.get("db_catalog"),
-            "db_schema": run.get("db_schema"),
-        }
+    import threading
+    thread = threading.Thread(target=_run_deploy_background, args=(run_id, mode), daemon=True)
+    thread.start()
 
-        objects = []
-        skipped = []
-        for conv in run.get("conversions", []):
-            review_status = conv.get("review_status", "pending_review")
-            if review_status != "approved":
-                skipped.append({
-                    "name": conv.get("name", ""),
-                    "object_type": conv.get("object_type", ""),
-                    "status": "skipped",
-                    "message": f"Skipped — review status: {review_status}",
-                })
-                continue
-            objects.append({
-                "name": conv.get("name", ""),
-                "object_type": conv.get("object_type", ""),
-                "converted_sql": conv.get("approved_sql") or conv.get("converted_sql", ""),
-                "raw_sql": conv.get("raw_sql", ""),
-            })
-
-        if not objects and not skipped:
-            return _tr("results.html", {
-                "error": "No approved objects to deploy. Approve objects in the Review tab first.",
-                "run_id": run_id, "run": run, "deploy_allowed": True,
-                "conversions": run.get("conversions", []),
-                "report": run.get("report", "") or "",
-                "summary": run.get("summary"),
-                "deploy_results": None, "storage_report": run.get("storage_report"),
-                "data_migration_results": run.get("data_migration_results"),
-            })
-
-        from agents.deployment_agent import DeploymentAgent
-        agent = DeploymentAgent()
-        is_dry = mode == "dry_run"
-        catalog_ddl = list(run.get("catalog_ddl") or [])
-        schema_ddl = list(run.get("schema_ddl") or [])
-
-        # If schema_ddl is empty, extract schemas from conversions
-        if not schema_ddl:
-            for conv in run.get("conversions", []):
-                if conv.get("object_type") == "schema":
-                    sql = conv.get("approved_sql") or conv.get("converted_sql", "")
-                    if sql:
-                        schema_ddl.append(sql)
-
-        target_cat = (creds.get("db_catalog") or "").strip()
-        if target_cat and catalog_ddl:
-            catalog_ddl = [f"CREATE CATALOG IF NOT EXISTS {target_cat}"]
-            seen = set()
-            rewritten = []
-            for s in schema_ddl:
-                parts = s.replace("CREATE SCHEMA IF NOT EXISTS ", "").split(".")
-                if len(parts) >= 2:
-                    ns = f"{target_cat}.{parts[-1]}"
-                    if ns not in seen:
-                        rewritten.append(f"CREATE SCHEMA IF NOT EXISTS {ns}")
-                        seen.add(ns)
-            schema_ddl = rewritten
-        results = agent.deploy(objects, creds, dry_run=is_dry,
-                               catalog_ddl=catalog_ddl or None, schema_ddl=schema_ddl or None)
-
-        deploy_results = [
-            {
-                "object": r.object_name,
-                "type": r.object_type,
-                "status": "dry_run" if is_dry and r.success else "success" if r.success else "error",
-                "message": r.error or (f"Would deploy ({r.duration_ms}ms simulated)" if is_dry else f"OK ({r.duration_ms}ms)"),
-            }
-            for r in results
-        ]
-        deploy_results.extend(skipped)
-
-        run["deploy_results"] = deploy_results
-        _store_run(run_id, run)
-
-        return _tr("results.html", {
-            "run_id": run_id, "run": run, "deploy_allowed": True,
-            "conversions": run.get("conversions", []),
-            "report": run.get("report", "") or "",
-            "summary": run.get("summary"),
-            "deploy_results": deploy_results, "error": None,
-            "storage_report": run.get("storage_report"),
-            "data_migration_results": run.get("data_migration_results"),
-        })
-
-    except Exception as e:
-        run = _get_run(run_id)
-        return _tr("results.html", {
-            "error": str(e),
-            "is_deploy_error": True,
-            "run_id": run_id, "deploy_allowed": True,
-            "conversions": (run or {}).get("conversions", []),
-            "report": (run or {}).get("report", ""),
-            "summary": (run or {}).get("summary"),
-            "deploy_results": None,
-        }, status_code=500)
+    return RedirectResponse(url=f"/results/{run_id}?deploying=1", status_code=302)
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -1920,10 +2599,10 @@ async def download_report(run_id: str):
     report_text = run.get("report", "")
     if not report_text:
         return JSONResponse({"error": "No report"}, status_code=404)
+    is_html = report_text.strip().startswith("<!DOCTYPE html>") or report_text.strip().startswith("<html")
     return Response(
         content=report_text,
-        media_type="text/plain",
-        headers={"Content-Disposition": f"attachment; filename=migration_report_{run_id}.txt"},
+        media_type="text/html" if is_html else "text/plain",
     )
 
 
