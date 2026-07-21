@@ -629,12 +629,28 @@ Alternative env vars: `GEMINI_API_KEY`, `LLM_CONFIG` (path to JSON config file),
 - Falls back to plaintext if `cryptography` is not installed
 - Used for all credential fields across projects and runs
 
-### Startup
+### Setup & Startup
+
 ```bash
-cd Migration-Agent
-uvicorn app:app --reload --host 0.0.0.0 --port 8001
+# 1. Clone the repo
+git clone https://github.com/Sayannaskar1/migration.git migration-agent
+cd migration-agent
+
+# 2. Create virtual environment and install dependencies
+python3 -m venv .venv
+source .venv/bin/activate       # macOS/Linux
+# .venv\Scripts\activate        # Windows
+pip install -r requirements.txt
+
+# 3. (Optional) Create .env for LLM features
+#     echo "LLM_PROVIDER=gemini" >> .env
+#     echo "LLM_API_KEY=your_key_here" >> .env
+
+# 4. Start the server
+uvicorn app:app --host 0.0.0.0 --port 8001 --reload
 ```
-Or via `run.sh` which activates the virtual environment and starts the server on port 8001.
+
+Or use `run.sh` which auto-detects `.venv/bin/python3` (either project-local or parent-relative) and falls back to system `python3`.
 
 ---
 
