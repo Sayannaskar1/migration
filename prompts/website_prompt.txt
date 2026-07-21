@@ -1,0 +1,139 @@
+Generate a single-page, dark-themed, visually stunning HTML/CSS website that serves as the landing/promotional page for the "Snowflake to Databricks Migration Agent v2.1" open-source project. The design must feel modern, tech-forward, and enterprise-grade — think Stripe docs meets Tesla UI meets Linear.app.
+
+## COLOR PALETTE
+- Background: #0a0a0f (deep midnight)
+- Card/panel backgrounds: #12121a with subtle #1a1a2e borders
+- Primary accent: #6366f1 (indigo) for buttons, links, highlights
+- Secondary accent: #06b6d4 (cyan) for data flow arrows, secondary CTAs
+- Success: #10b981 (emerald) for stats/numbers
+- Warning: #f59e0b (amber)
+- Text: #e2e8f0 for body, #94a3b8 for muted, #ffffff for headings
+- Gradients: indigo→purple (#6366f1 → #a855f7) for hero headings, cyan→teal for section accents
+
+## TYPOGRAPHY
+- Use Inter font from Google Fonts (already in the project)
+- Headings: 800 weight, letterspacing -0.03em
+- Mono: JetBrains Mono for code blocks
+- Body: 400 weight, 1.6 line-height
+
+## SECTIONS (in order)
+
+### 1. HERO
+- Full-viewport hero with animated gradient background (indigo/purple/dark blend)
+- Large heading: "Snowflake → Databricks" with "Migration Agent v2.1" subtitle
+- Tagline: "Enterprise-Grade Automated Migration Platform"
+- Animated 3D-ish pipeline flow graphic (CSS/SVG): Snowflake logo → arrows → 3 layers → Databricks logo
+  - Three glowing layers labeled "SQLGlot (AST) • 25%", "Rule Engine (Regex) • 70%", "LLM (AI) • 5%"
+  - Animated particles/data flowing through the layers
+- Two buttons: "View on GitHub" (primary) and "Quick Start" (outline)
+- Floating tech badges below: Python, FastAPI, SQLGlot, Databricks, Snowflake, Gemini
+
+### 2. STATS BAR
+- Horizontal row of 4 animated counters:
+  - "28 AI Agents" with robot icon
+  - "152 Automated Tests" with checkmark icon
+  - "23-Step Pipeline" with gears icon
+  - "100+ Regex Rules" with code icon
+- Each counter counts up on scroll (CSS animation is fine, or IntersectionObserver)
+
+### 3. OVERVIEW
+- Two-column layout:
+  - Left: "What It Does" — concise description of the end-to-end migration automation
+  - Right: key capabilities as icon+text grid (4 items): Live DDL Extraction, 3-Layer Transpilation, LLM-Powered Review, Cloud Data Migration
+- Clean, spacious, lots of breathing room
+
+### 4. 3-LAYER TRANSPILATION ENGINE
+- Visual centerpiece: three horizontal cards/steps showing progressively
+- Layer 1 (SQLGlot AST — 25%): purple accent, shows parse tree icon, lists: Type Mapping, JOIN/FROM, Basic DDL
+- Layer 2 (Rule Engine Regex — 70%): indigo accent, shows regex icon, lists: IFF→CASE, QUALIFY→subquery, ARRAY_AGG, LATERAL FLATTEN, 40+ type mappings
+- Layer 3 (LLM AI — 5%): cyan accent, shows brain icon, lists: Self-Healing, Low-Confidence Review, Complex Procedures
+- Connecting arrow between each layer with percentage labels
+
+### 5. 23-STEP PIPELINE
+- Scrollable interactive timeline (vertical, like a Git timeline)
+- Each step is a dot on the line with:
+  - Step number (1-23) in a circle
+  - Step name in bold
+  - Brief description
+- Color-coded by phase: blue for loading, green for analysis, purple for transpilation, amber for review, emerald for deployment
+- Steps 8-10 (sqlglot_transpile, lakebridge_transpile, rule_engine) should be highlighted as the "Core Engine"
+
+### 6. ALL 28 AGENTS
+- Grid of agent cards (4 columns on desktop, 2 on tablet, 1 on mobile)
+- Each card has:
+  - Agent number and name
+  - File path in small mono text
+  - 2-3 bullet points of what it does
+  - Tech tag (e.g., "Python", "LLM", "Regex")
+- Cards have glassmorphism effect (backdrop-filter blur, semi-transparent background)
+- On hover: subtle glow border matching the tech tag color
+
+### 7. ARCHITECTURE DIAGRAM
+- Full-width SVG/HTML diagram showing the complete data flow:
+  ```
+  [Snowflake] → [Connector Layer] → [Parser] → [3-Layer Engine] → [Validation] → [LLM Review] → [Deployment] → [Databricks]
+                                            ↓
+                                     [Data Migration]
+                                            ↓
+                                   [S3/Azure/GCS]
+  ```
+- Animated flowing arrows between each box
+- Each box is a different accent color
+- Tooltip on hover showing what happens at each stage
+
+### 8. TECH STACK
+- Clean grid showing all technologies with logos (use Devicon CDN or inline SVGs)
+- Two rows: Core Stack, Infrastructure
+- Each item: icon + technology name + brief purpose
+- Subtle animation on scroll
+
+### 9. DATA MIGRATION FLOW
+- Vertical flowchart showing Snowflake → COPY INTO → Cloud Storage → Python Pipeline → Databricks Delta
+- 3 cloud provider tabs (AWS/Azure/GCS) that switch the storage icon and credential type
+- Row count verification badge, batch processing note
+
+### 10. API ENDPOINTS
+- Collapsible section showing key REST endpoints in a table
+- Grouped by: UI Routes, Migration API, Data API
+- Method badges colored (GET=green, POST=blue, DELETE=red)
+- Brief description per endpoint
+
+### 11. QUICK START
+- Two-tab switcher: "Direct" and "run.sh"
+- Both show the exact bash commands in a code block with copy button
+- Dark terminal-style code block with green prompt
+- Below: optional .env configuration in another code block
+
+### 12. KEY DESIGN DECISIONS
+- Numbered list (1-14) with each item in a card
+- Alternating layout: text left / number right, then flip
+- Each card has a subtle gradient border on its left side
+
+### 13. FOOTER
+- Dark footer with:
+  - Project name and version
+  - GitHub link
+  - "Built with FastAPI • SQLGlot • Gemini" tagline
+  - Copyright
+
+## TECHNICAL REQUIREMENTS
+- Single HTML file (embeddable, no build step)
+- All CSS inline in <style> tag
+- All JS inline in <script> tag
+- Use CDN for: Inter font, JetBrains Mono, Font Awesome icons (free), Devicon
+- NO external CSS/JS frameworks (no Tailwind, no Bootstrap)
+- Smooth scroll for anchor links
+- Fade-in animations on scroll using IntersectionObserver
+- Fully responsive: desktop 4-col → tablet 2-col → mobile 1-col
+- Dark scrollbar styling
+- Performance: lazy load icons, minimal DOM manipulation
+- Copy button for code blocks using Clipboard API
+- Mobile hamburger nav if needed
+
+## TONE
+- Professional but not boring
+- Technical but accessible
+- Enterprise-grade feel
+- Confident and polished
+
+Use the full documentation from the project's documentation.md to ensure accuracy of all agent descriptions, pipeline steps, and technical details.
