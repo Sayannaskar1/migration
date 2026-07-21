@@ -38,7 +38,7 @@ Enterprise-grade migration platform that automates end-to-end migration of Snowf
 ## Project Structure
 
 ```
-Migration-Agent/
+migration/                     # (or any name, e.g. migration-agent-1)
   app.py                  # FastAPI web app: all routes, endpoints, run orchestration
   main.py                 # CLI entry point for headless migration
   orchestrator.py         # MigrationOrchestrator — 21-step pipeline manager
@@ -449,7 +449,7 @@ Each step reports progress via a shared `progress` dict. The UI polls `/api/stat
 - `_RUNS_MAX`: 200 (max cached runs)
 
 ### Credential Security Model
-1. Fernet key auto-generated at `Migration-Agent/.key` on first run
+1. Fernet key auto-generated at `migration/.key` (or project root) on first run
 2. `_encrypt()` / `_decrypt()` wrap Fernet operations
 3. `_secure_creds()` encrypts all `_SECRET_FIELDS` values in a dict
 4. `_restore_creds()` decrypts them (skips non-encrypted values like `dapi*` tokens)
@@ -625,16 +625,16 @@ LLM_API_KEY=your_key_here
 Alternative env vars: `GEMINI_API_KEY`, `LLM_CONFIG` (path to JSON config file), `AUTO_DEPLOY_APPROVE=1` (auto-approve deployment), `DATABRICKS_HOST`, `DATABRICKS_TOKEN`
 
 ### Encryption Key
-- Auto-generated at `Migration-Agent/.key`
+- Auto-generated at `migration/.key` (or project root)
 - Falls back to plaintext if `cryptography` is not installed
 - Used for all credential fields across projects and runs
 
 ### Setup & Startup
 
 ```bash
-# 1. Clone the repo
-git clone https://github.com/Sayannaskar1/migration.git migration-agent
-cd migration-agent
+# 1. Clone the repo (creates migration/ directory)
+git clone https://github.com/Sayannaskar1/migration.git
+cd migration
 
 # 2. Create virtual environment and install dependencies
 python3 -m venv .venv
