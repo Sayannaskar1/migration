@@ -126,6 +126,43 @@ def _check_constraints(source: ParsedObject, target_sql: str) -> tuple[list[str]
     return notes, warnings
 
 
+def _validate_sequence(obj: ParsedObject, result: ValidationResult) -> None:
+    raw = obj.raw_sql or ""
+    converted = obj.converted_sql or ""
+
+    has_start_raw = bool(re.search(r"(?i)START\s+WITH\s+\d+", raw))
+    has_start_conv = bool(re.search(r"(?i)START\s+WITH\s+\d+", converted))
+    has_inc_raw = bool(re.search(r"(?i)INCREMENT\s+BY\s+\d+", raw))
+    has_inc_conv = bool(re.search(r"(?i)INCREMENT\s+BY\s+\d+", converted))
+    has_or_replace = bool(re.search(r"(?i)\bOR\s+REPLACE\b", raw))
+    has_noorder = bool(re.search(r"(?i)\bNOORDER\b", raw))
+    has_order = bool(re.search(r"(?i)\bORDER\b", raw)) and not has_noorder
+
+    if has_start_raw and has_start_conv:
+        result.notes.append("START WITH preserved")
+    elif has_start_raw and not has_start_conv:
+        result.issues.append("START WITH from source not found in converted SQL")
+
+    if has_inc_raw and has_inc_conv:
+        result.notes.append("INCREMENT BY preserved")
+    elif has_inc_raw and not has_inc_conv:
+        result.issues.append("INCREMENT BY from source not found in converted SQL")
+
+    if has_or_replace:
+        if "DROP SEQUENCE IF EXISTS" in converted:
+            result.notes.append("OR REPLACE adapted to DROP IF EXISTS + CREATE")
+        else:
+            result.issues.append("OR REPLACE in source but no DROP IF EXISTS in converted SQL")
+
+    if has_noorder:
+        result.notes.append("NOORDER noted — no Databricks equivalent, default ordering used")
+    if has_order:
+        result.notes.append("ORDER noted — no Databricks equivalent, default ordering used")
+
+    result.notes.append("Sequence converted to Databricks SEQUENCE (Unity Catalog)")
+    result.status = ValidationResult.ARCHITECTURAL_CHANGE
+
+
 def validate_object(
     obj: ParsedObject, inventory: ProjectInventory
 ) -> ValidationResult:
@@ -142,10 +179,13 @@ def validate_object(
         return result
 
     if obj.object_type in _ARCHITECTURAL_TYPES:
-        result.notes.append(
-            f"SQL validation skipped — {obj.object_type} converted to architecture artifact, not executable SQL"
-        )
-        result.status = ValidationResult.ARCHITECTURAL_CHANGE
+        if obj.object_type == "sequence":
+            _validate_sequence(obj, result)
+        else:
+            result.notes.append(
+                f"SQL validation skipped — {obj.object_type} converted to architecture artifact, not executable SQL"
+            )
+            result.status = ValidationResult.ARCHITECTURAL_CHANGE
     else:
         syntax_errors = validate_sql_syntax(obj.converted_sql)
         for err in syntax_errors:

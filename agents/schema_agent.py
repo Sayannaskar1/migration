@@ -491,11 +491,15 @@ def _convert_procedure_body(body: str) -> str:
     # Convert Snowflake TEMPORARY TABLE → Databricks TEMPORARY VIEW
     # Databricks SQL Warehouse doesn't support CREATE TEMPORARY TABLE
     # Also: Databricks temp views only accept single-part names (no catalog.schema prefix)
-    body = re.sub(
+    def _temp_table_to_view(m: re.Match) -> str:
+        return "CREATE OR REPLACE TEMPORARY VIEW " + m.group(1).split(".")[-1]
+    body, temp_view_count = re.subn(
         r"(?i)CREATE\s+(?:OR\s+REPLACE\s+)?TEMPORARY\s+TABLE\s+(\w+(?:\.\w+)*)",
-        lambda m: "CREATE OR REPLACE TEMPORARY VIEW " + m.group(1).split(".")[-1],
+        _temp_table_to_view,
         body,
     )
+    if temp_view_count:
+        body += "\n\n-- Migration Note: Temporary table converted to temporary view because the object is read-only."
     # Convert TABLE(GENERATOR(ROWCOUNT => N)) → VALUES + SEQUENCE
     # Matches both literal numbers and variable references (e.g. ROWCOUNT => :d → ROWCOUNT => d)
     body = re.sub(
@@ -548,9 +552,10 @@ def _convert_create_procedure_sql(sql: str) -> str:
     if execute_as_match:
         execute_as_note = (
             f"\n"
-            f"-- Snowflake execution context: EXECUTE AS {execute_as_match.group(1).upper()}\n"
-            f"-- Databricks uses Unity Catalog permissions instead.\n"
-            f"-- Manual review recommended."
+            f"-- Migration Note:\n"
+            f"-- Snowflake EXECUTE AS {execute_as_match.group(1).upper()} has no Databricks equivalent.\n"
+            f"-- Databricks uses Unity Catalog permissions with SQL SECURITY INVOKER.\n"
+            f"-- Review Unity Catalog privileges to ensure correct access control."
         )
     sql = re.sub(r"(?i)\s*EXECUTE\s+AS\s+(?:OWNER|CALLER)", "", sql)
     # Collapse blank lines before inserting SQL SECURITY
@@ -560,6 +565,12 @@ def _convert_create_procedure_sql(sql: str) -> str:
     if dollar_match:
         before_body = sql[:dollar_match.start(0)].rstrip()
         body = dollar_match.group(1).strip()
+        # Convert Snowflake doubled single quotes to single quotes.
+        # Inside $$ delimiters, '' is literal (two quote chars).
+        # Inside Databricks AS...END, '' is an escaped quote that produces one '.
+        # This ensures dynamic SQL string concatenation builds correctly
+        # (e.g. '''''' → ''' → one literal quote in the string value).
+        body = body.replace("''", "'")
         body = _convert_procedure_body(body)
         # Convert RETURN 'msg' to SELECT 'msg' (RETURN requires RETURNS clause in Databricks)
         # Databricks SQL Warehouse does not support RETURNS on procedures,
@@ -568,7 +579,7 @@ def _convert_create_procedure_sql(sql: str) -> str:
             r"(?i)(^|\s)RETURN\s+",
             lambda m: (
                 m.group(1)
-                + "SELECT /* Note: RETURN converted to SELECT — Databricks SQL Warehouse does not support RETURN on procedures */ "
+                + "-- Migration Note: Snowflake RETURN converted to SELECT because Databricks SQL procedures do not return scalar values.\n  SELECT "
             ),
             body,
         )
@@ -601,7 +612,7 @@ def _convert_create_procedure_sql(sql: str) -> str:
                 r"(?i)(^|\s)RETURN\s+",
                 lambda m: (
                     m.group(1)
-                    + "SELECT /* Note: RETURN converted to SELECT — Databricks SQL Warehouse does not support RETURN on procedures */ "
+                    + "-- Migration Note: Snowflake RETURN converted to SELECT because Databricks SQL procedures do not return scalar values.\n  SELECT "
                 ),
                 body,
             )
@@ -641,8 +652,6 @@ def _convert_create_procedure_sql(sql: str) -> str:
     needs_review = []
     if re.search(r"RESULT_SCAN", sql, re.IGNORECASE):
         needs_review.append("RESULT_SCAN() has no Databricks equivalent")
-    if re.search(r"EXECUTE\s+IMMEDIATE", sql, re.IGNORECASE):
-        needs_review.append("EXECUTE IMMEDIATE needs manual conversion")
     if re.search(r"LANGUAGE\s+JAVASCRIPT", sql, re.IGNORECASE):
         needs_review.append("JavaScript body requires manual conversion to Python or Scala")
     # Flag IDENTIFIER() — dynamic table resolution, no Databricks equivalent
@@ -936,29 +945,44 @@ def _convert_create_materialized_view_sql(sql: str) -> str:
 
 def _convert_create_sequence_sql(sql: str) -> str:
     name_match = re.search(
-        r"(?i)CREATE\s+(?:OR\s+REPLACE\s+)?SEQUENCE\s+([\w.]+)",
+        r"(?i)CREATE\s+(?:OR\s+REPLACE\s+)?SEQUENCE\s+(?:IF\s+NOT\s+EXISTS\s+)?([\w.]+)",
         sql,
     )
     name = name_match.group(1) if name_match else "unknown"
 
+    has_or_replace = bool(re.search(r"(?i)\bOR\s+REPLACE\b", sql))
     start = re.search(r"(?i)START\s+WITH\s+(\d+)", sql)
     inc = re.search(r"(?i)INCREMENT\s+BY\s+(-?\d+)", sql)
-    has_order = bool(re.search(r"(?i)\bORDER\b", sql))
+    has_noorder = bool(re.search(r"(?i)\bNOORDER\b", sql))
+    has_order = bool(re.search(r"(?i)\bORDER\b", sql)) and not has_noorder
 
-    lines = [f"CREATE SEQUENCE {name}"]
+    parts = []
+    if has_or_replace:
+        parts.append(f"DROP SEQUENCE IF EXISTS {name};")
+        parts.append("")
+
+    create_parts = ["CREATE SEQUENCE"]
     if start:
-        lines.append(f"START WITH {start.group(1)}")
+        create_parts.append(f"START WITH {start.group(1)}")
     if inc:
-        lines.append(f"INCREMENT BY {inc.group(1)}")
-    result = " ".join(lines) + ";"
+        create_parts.append(f"INCREMENT BY {inc.group(1)}")
+    parts.append(" ".join(create_parts) + ";")
 
+    notes = []
+    if has_or_replace:
+        notes.append("OR REPLACE semantics adapted to DROP IF EXISTS + CREATE (Databricks does not support CREATE OR REPLACE SEQUENCE).")
+    if has_noorder:
+        notes.append("Snowflake NOORDER has no Databricks equivalent. Default Databricks sequence ordering is used.")
     if has_order:
-        result += (
-            f"\n\n-- Original Snowflake option: ORDER"
-            f"\n-- Databricks does not support ordered sequence generation."
-        )
+        notes.append("Snowflake ORDER has no Databricks equivalent. Default Databricks sequence ordering is used.")
 
-    return result
+    if notes:
+        parts.append("")
+        parts.append("-- Migration Note:")
+        for note in notes:
+            parts.append(f"-- {note}")
+
+    return "\n".join(parts)
 
 
 def _convert_create_masking_policy_sql(sql: str) -> str:

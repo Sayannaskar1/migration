@@ -1,8 +1,10 @@
-# Snowflake → Databricks Migration Agent v2.0
+# Snowflake → Databricks Migration Agent v2.1
 
 ## Overview
 
 Enterprise-grade migration platform that automates end-to-end migration of Snowflake databases to Databricks. The system discovers Snowflake objects via live connection or SQL file upload, transpiles DDL/DML to Databricks-compatible SQL through a 3-layer transpilation engine, validates correctness, runs LLM-based review, deploys objects to Databricks via the Statement Execution API, and migrates data through cloud storage (S3/Azure Blob/GCS).
+
+**Repository**: [github.com/Sayannaskar1/migration](https://github.com/Sayannaskar1/migration)
 
 ---
 
@@ -51,9 +53,10 @@ Migration-Agent/
   agents/                          # === AI Agent Modules ===
     project_loader.py               # Load SQL project from file system or in-memory tree
     dependency_agent.py             # Dependency analysis, topological sort, cycle detection
-    schema_agent.py                 # DDL conversion: procedures, functions, UPDATE→MERGE transpiler
+    schema_agent.py                 # DDL conversion: 16 object types, UPDATE→MERGE transpiler
     sql_translation_agent.py        # Schema/object translation utilities
     sqlglot_transpiler.py           # SQLGlot AST-based batch transpilation
+    lakebridge_transpiler.py        # LakeBridge custom SQLGlot dialects + Morpheus LSP transpiler
     rule_engine.py                  # Deterministic regex-based SQL conversion (100+ rules)
     capability_checker.py           # Feature detection: Snowflake-specific capabilities
     validation_agent.py             # Syntax validation, schema comparison, type checking
@@ -70,9 +73,18 @@ Migration-Agent/
     performance_optimizer.py        # OPTIMIZE/VACUUM/ZORDER recommendations
     self_healing_engine.py          # Retry failed conversions via regex/LLM fallback
     semi_structured_agent.py        # Semi-structured data (VARIANT/JSON) conversion
-    js_to_python_udf_agent.py       # JavaScript UDF → Python UDF conversion
+    js_to_python_udf_agent.py       # JavaScript UDF → Python UDF conversion (rule-based + LLM fallback)
     migration_state.py              # State management for resumable migrations
     data_migration_engine.py        # Top-level orchestrator for data migration
+
+    platform/                       # === Platform Migration Strategies ===
+      mapping_catalog.py            # Object type → target mapping catalog
+      strategy_base.py              # Abstract base for strategy analyses
+      strategies/                   # Individual strategy implementations
+        policy_strategy.py          # Masking/row access policy strategies
+        role_strategy.py            # Role migration strategy
+        task_strategy.py            # Task → Job strategy
+        warehouse_strategy.py       # Warehouse → SQL Warehouse strategy
 
     data_migration/                 # === Data Migration Subsystem ===
       mover_base.py                 # Abstract DataMover base class + MigrateResult dataclass
@@ -137,7 +149,7 @@ Layer 3: LLM (Gemini/OpenAI/Anthropic) — 5% of conversions
             complex procedures/functions that need semantic understanding
 ```
 
-### 21-Step Migration Pipeline
+### 23-Step Migration Pipeline
 
 The `MigrationOrchestrator.run()` method executes these steps in order:
 
@@ -148,37 +160,48 @@ The `MigrationOrchestrator.run()` method executes these steps in order:
  4. storage_discovery     — StorageDiscoveryAgent: classify tables (internal/external/Iceberg)
  5. capability_check      — Detect Snowflake-specific capabilities/features per object
  6. plan                  — PlannerAgent: build execution plan with catalog mapping
- 7. sqlglot_transpile     — Layer 1: SQLGlot AST transpilation
- 8. rule_engine           — Layer 2: deterministic regex rules
- 9. semi_structured       — SemiStructuredAgent: handle VARIANT/JSON/XML
-10. js_conversion         — JSPythonUDFAgent: JS→Python UDF conversion
-11. regex_cleanup          — SchemaAgent cleanup pass + SQL translation agent
-12. confidence_scoring    — ConfidenceEngine: score each object (0.0–1.0)
-13. llm_verify            — Layer 3a: LLM re-transpile objects with validation errors
-14. validation            — ValidationAgent: syntax check, schema compare, Snowflake feature residual
-15. llm_review            — Layer 3b: LLM review ALL objects (unconditional)
-16. self_healing          — SelfHealingEngine: retry failed conversions (3 attempts)
-17. deployment_approval   — Check blockers, auto-approve if set
-18. deployment            — DeploymentAgent: deploy to Databricks with dep resolution
-19. performance_optimizer — PerformanceOptimizer: OPTIMIZE/VACUUM suggestions
-20. manifest              — ManifestGenerator: JSON migration manifest
-21. documentation         — Generate report, inventory CSV, dependency diagram
+ 7. platform_analysis     — PlatformMigrationEngine: strategy analysis for platform objects (streams, tasks, pipes, stages, etc.)
+ 8. sqlglot_transpile     — Layer 1: SQLGlot AST transpilation + LakeBridge custom dialects
+ 9. lakebridge_transpile  — Layer 1b: Morpheus LSP transpiler (JAR-based, fallback when available)
+10. rule_engine           — Layer 2: deterministic regex rules
+11. semi_structured       — SemiStructuredAgent: handle VARIANT/JSON/XML
+12. js_conversion         — JSPythonUDFAgent: JS→Python UDF conversion (rule-based + LLM fallback)
+13. regex_cleanup         — SchemaAgent cleanup pass + SQL translation agent
+14. confidence_scoring    — ConfidenceEngine: score each object (0.0–1.0)
+15. llm_verify            — Layer 3a: LLM re-transpile objects with validation errors
+16. validation            — ValidationAgent: syntax check, schema compare, Snowflake feature residual
+17. llm_review            — Layer 3b: LLM review ALL objects (unconditional)
+18. self_healing          — SelfHealingEngine: retry failed conversions (3 attempts)
+19. deployment_approval   — Check blockers, auto-approve if set
+20. deployment            — DeploymentAgent: deploy to Databricks with dep resolution
+21. performance_optimizer — PerformanceOptimizer: OPTIMIZE/VACUUM suggestions
+22. manifest              — ManifestGenerator: JSON migration manifest
+23. documentation         — Generate report, inventory CSV, dependency diagram
 ```
 
 ### Web UI Pipeline (FastAPI)
 
-The FastAPI app (`app.py`) uses a simplified 9-step pipeline tracked in real-time:
+The FastAPI app (`app.py`) uses a simplified 9-phase pipeline tracked in real-time:
 
 ```
-Step 1:  Extract DDL from Snowflake
-Step 2:  Analyze dependencies
-Step 3:  SQL Translation (SQLGlot + Rules + LLM + Schema)
-Step 4:  Validation
-Step 5:  LLM Review
-Step 6:  Report Generation
-Step 7:  Deploy to Databricks
-Step 8:  Data Migration (optional, manual trigger)
-Step 9:  Complete
+Phase 1: Connect to Snowflake   — Authenticate, validate credentials, test connection
+Phase 2: Extract DDL             — Discover schemas, extract tables/views/procedures/functions/
+                                    streams/tasks/stages/pipes/file_formats/policies/sequences
+Phase 3: Dependency Analysis     — Parse SQL, build AST, resolve references, detect cycles,
+                                    determine execution order, generate dependency graph
+Phase 4: Capability Analysis     — Detect unsupported features, JavaScript procedures,
+                                    external functions, dynamic SQL, generate capability report
+Phase 5: Translation             — Translate schemas/tables/views/functions/procedures,
+                                    apply rule engine, convert semi-structured & JavaScript,
+                                    regex cleanup, score confidence
+Phase 6: AI Verification         — Prepare prompt, send to LLM, receive response,
+                                    apply suggestions, generate confidence
+Phase 7: Validation              — Validate SQL syntax, Databricks compatibility,
+                                    dependencies, architecture, semantic validation
+Phase 8: Self Healing            — Detect errors, classify, choose repair strategy,
+                                    retry translation, validate repair
+Phase 9: Generate Report         — Generate inventory, dependency graph, statistics,
+                                    recommendations, summary, save report
 ```
 
 Each step reports progress via a shared `progress` dict. The UI polls `/api/status/{run_id}` every 2 seconds.
@@ -202,24 +225,34 @@ Each step reports progress via a shared `progress` dict. The UI polls `/api/stat
 - Object-type-aware deployment ordering
 
 ### 3. SchemaAgent (`agents/schema_agent.py`)
-**Functions**: `convert_schema`, `_convert_create_table_sql`, `_convert_create_procedure_sql`, `_convert_create_function_sql`, `_convert_create_view_sql`, `_convert_update_from_to_merge`, `_convert_procedure_body`
-- Deterministic DDL-to-DDL conversion for all object types
+**Functions**: `convert_schema`, `_convert_create_table_sql`, `_convert_create_schema_sql`, `_convert_create_view_sql`, `_convert_create_procedure_sql`, `_convert_create_function_sql`, `_convert_create_external_table_sql`, `_convert_create_stage_sql`, `_convert_create_materialized_view_sql`, `_convert_create_sequence_sql`, `_convert_create_masking_policy_sql`, `_convert_create_row_access_policy_sql`, `_convert_create_role_sql`, `_convert_create_stream_sql`, `_convert_create_pipe_sql`, `_convert_create_file_format_sql`, `_convert_create_task_sql`, `_convert_update_from_to_merge`, `_convert_procedure_body`
+- Deterministic DDL-to-DDL conversion for 16 object types
 - Key transpilations:
-  - Procedure: `CREATE PROCEDURE` → Databricks SQL with `SQL SECURITY INVOKER`, `RETURN` → `SELECT`, `SQLROWCOUNT` → `ROW_COUNT`, `LET` → `DECLARE`/`SET`, `UPDATE...FROM` → `MERGE INTO`, `TEMPORARY TABLE` → `TEMPORARY VIEW`
-  - Function: `RETURNS NUMBER` → `RETURNS DECIMAL`, `VARCHAR(20)` → `STRING`, `AS 'body'` → `RETURN body`
-  - Table: `AUTOINCREMENT` → IDENTITY, add `USING DELTA` with `TBLPROPERTIES(allowColumnDefaults)`, `CLUSTER BY` → `ZORDER BY`
-  - View: `SECURE VIEW` → `VIEW`
-  - External table → managed Delta table with architectural change note
-  - Stage → Databricks VOLUME with architectural change note
-  - Sequence: preserved as-is
+  - **Procedure**: `CREATE PROCEDURE` → Databricks SQL with `SQL SECURITY INVOKER`, `RETURN` → `SELECT` (migration note block), `SQLROWCOUNT` → `ROW_COUNT` comment, `LET` → `DECLARE`/`SET`, `UPDATE...FROM` → `MERGE INTO`, `TEMPORARY TABLE` → `TEMPORARY VIEW` (with migration note), triple-quote dynamic SQL concatenation fix (`''''''` → `'''`). `EXECUTE IMMEDIATE` does NOT trigger manual review. `EXECUTE AS OWNER` preserved as migration note only.
+  - **Function**: `RETURNS NUMBER` → `RETURNS DECIMAL`, `VARCHAR(20)` → `STRING`, `AS 'body'` → `RETURN body`, JavaScript UDF → Python UDF (via rule-based translator or LLM)
+  - **Table**: `AUTOINCREMENT` → IDENTITY, add `USING DELTA` with `TBLPROPERTIES(allowColumnDefaults)=true`, `CLUSTER BY` → `ZORDER BY`, `IDENTITY(start, inc)` → `GENERATED BY DEFAULT AS IDENTITY`, type conversion safety net (`VARCHAR`→`STRING`, `VARIANT`→`STRING`, `NUMBER`→`DECIMAL`, `TIMESTAMP_NTZ/LTZ/TZ`→`TIMESTAMP`, `FLOAT4/8/DOUBLE PRECISION/REAL`→`DOUBLE`), trailing content truncation, `NEXT VALUE FOR seq` → `DEFAULT seq.NEXTVAL` fix
+  - **View**: `SECURE VIEW` → structured `Security Architecture Change` block, aggregate view optimization recommendations
+  - **Stage**: Internal stages → managed `CREATE VOLUME`; external stages → cloud-specific `CREATE STORAGE CREDENTIAL` + `CREATE EXTERNAL LOCATION` + `CREATE EXTERNAL VOLUME` with `target_cloud` selector (AWS IAM_ROLE / Azure AZURE_MANAGED_IDENTITY / GCP GCP_SERVICE_ACCOUNT)
+  - **Sequence**: `OR REPLACE` → `DROP SEQUENCE IF EXISTS` + `CREATE`, `START WITH` / `INCREMENT BY` preserved, `NOORDER` / `ORDER` → migration notes, `NEXTVAL` → `NEXT VALUE FOR`
+  - **Masking Policy**: Metadata block (original name, return type, expression), `ALTER TABLE ... SET MASK` template, `Status: Successfully Converted` + `ACTION REQUIRED`
+  - **Row Access Policy**: Same pattern as masking policy — metadata + `ALTER TABLE ... SET ROW FILTER`
+  - **Stream**: Metadata block + `delta.enableChangeDataFeed = true` + `table_changes()` and Structured Streaming templates
+  - **Pipe**: Metadata block + Auto Loader (`cloudFiles`) template; no `CREATE PIPE` DDL; `Status + Action Required` section
+  - **Task**: Migration artifact (all comments), extracts schedule/warehouse/AFTER dependencies/WHEN condition; confidence labels (80% CRON, 50% stream-triggered)
+  - **File Format**: Parses all properties into `_file_format_registry` dict, generates migration note with property mapping table, `FORMAT_OPTIONS` example, Spark options block; no blanket manual review
+  - **External table**: → managed Delta table with architectural change note
+  - **Schema**: Preserved as-is with catalog mapping prefix
+  - **Role**: Preserved as-is
 
 ### 4. SQLTranslationAgent (`agents/sql_translation_agent.py`)
 - Pipeline cleanup: schema name remapping, table reference rewriting across catalogs
 - Integration with catalog mapping engine for database→catalog translation
 
-### 5. SQLGlotTranspiler (`agents/sqlglot_transpiler.py`)
-- Batch transpilation: feeds entire inventory through SQLGlot
-- Fallback mode preserves original SQL on parse failure
+### 5. SQLGlotTranspiler & LakeBridge (`agents/sqlglot_transpiler.py`, `agents/lakebridge_transpiler.py`)
+- **SQLGlotTranspiler**: Batch transpilation via standard SQLGlot Snowflake→Databricks dialect; fallback preserves original SQL on parse failure
+- **LakeBridge Transpiler**: Custom SQLGlot dialects from Databricks Labs LakeBridge project (loaded from `~/Desktop/forked/lakebridge/src` when available); globally monkey-patches sqlglot dialect registry
+- **Morpheus LSP**: JAR-based transpiler (`databricks-morph-plugin.jar`) with LSP client support; used as optional secondary transpilation pass
+- **`--` prefix handling**: LakeBridge may comment out CREATE statements with `--` when it encounters unsupported syntax — fallback strips `--` prefix from first line to recover DDL structure
 - Pre-processing: `NUMBER AUTOINCREMENT` → `BIGINT GENERATED ALWAYS AS IDENTITY`, `TO_NUMBER` → `CAST(... AS DECIMAL)`, `TRY_PARSE_JSON` replacement
 
 ### 6. RuleEngine (`agents/rule_engine.py`)
@@ -237,13 +270,14 @@ Each step reports progress via a shared `progress` dict. The UI polls `/api/stat
 
 ### 8. ValidationAgent (`agents/validation_agent.py`)
 **Classes**: `ValidationResult`
-- Syntax validation via SQLGlot Databricks dialect parsing
-- Schema match: column count comparison between source and target
-- Feature residual detection: detect unconverted Snowflake features
+- Syntax validation via SQLGlot Databricks dialect parsing (skipped for procedural SQL with BEGIN/DECLARE/EXCEPTION and for architectural types)
+- Schema match: column count comparison between source and target (with backtick retry)
+- Feature residual detection: detect unconverted Snowflake features (filtered against false positive keywords)
 - Type validation: catch `STRING(N)` or `BINARY(N)` (invalid in Databricks)
 - Constraint warnings: PRIMARY KEY/FOREIGN KEY are informational in Unity Catalog
-- JavaScript UDF detection and error
-- Architectural change detection and reclassification
+- JavaScript UDF detection: checks `converted_sql` (not `raw_sql`) to avoid false positives on successfully converted JS
+- Architectural change detection: pipes, tasks, file_formats, streams, stages, masking_policies, row_access_policies, sequences skip SQL validation entirely
+- Sequence-specific validation: checks START WITH/INCREMENT BY preservation, OR REPLACE adaptation, NOORDER/ORDER documentation
 - Confidence computation: base 1.0, -0.1 per warning, -0.2 per issue, -0.3 per error
 
 ### 9. ConfidenceEngine (`agents/confidence_engine.py`)
@@ -303,6 +337,8 @@ Each step reports progress via a shared `progress` dict. The UI polls `/api/stat
 - Generates comprehensive text report with per-object details
 - Inventory CSV export
 - Dependency diagram (text-based)
+- Stat box with 5 mutually exclusive categories: Auto Converted, Manual Review, Architectural, Issues, Failed
+- Bug fix: `manual_review_count` reference corrected to `manual_review` (variable name)
 
 ### 18. ManifestAgent (`agents/manifest_agent.py`)
 **Classes**: `MigrationManifest`, `ManifestGenerator`
@@ -324,7 +360,11 @@ Each step reports progress via a shared `progress` dict. The UI polls `/api/stat
 - Strategy options: "native" (use Databricks JSON functions), "struct" (use STRUCT type)
 
 ### 22. JSPythonUDFAgent (`agents/js_to_python_udf_agent.py`)
-- Converts JavaScript UDFs to Python UDFs for Databricks
+- Converts JavaScript UDFs to Python UDFs for Databricks using a two-phase approach:
+  1. **Rule-based translator** (`_rule_based_translate`): Attempts deterministic JS→Python conversion first. Handles: null checks, `===`/`!==`→`==`/`!=`, `&&`/`||`→`and`/`or`, string methods (`.toLowerCase()`/`.trim()`/`.toUpperCase()`/`.length`/`.indexOf()`/`.includes()`/`.slice()`/`.replace()`/`.split()`/`.join()`/`.push()`), Math methods, parseInt/parseFloat, ternary `x ? y : z`, if/else if/else, object/array literal syntax
+  2. **LLM fallback**: Complex patterns (snowflake APIs, eval, classes, async, prototypes, etc.) fall back to Gemini/OpenAI/Anthropic
+- `_extract_params()` fallback regex uses `[^\s(]+` to prevent gobbling the opening parenthesis
+- `_ensure_imports()` auto-injects required Python modules (math, json, etc.)
 - Status tracking: converted/failed per object
 
 ### 23. DataMigrationEngine (`agents/data_migration_engine.py`)
@@ -349,6 +389,12 @@ Each step reports progress via a shared `progress` dict. The UI polls `/api/stat
 
 ### 27. IcebergDataMover (`agents/data_migration/iceberg_data_mover.py`)
 - Syncs Iceberg tables: `SYNC FROM ICEBERG TABLE`
+
+### 28. PlatformMigrationEngine (`agents/platform/`)
+- Strategy-based analysis for platform-level objects (streams, tasks, pipes, stages, warehouses, masking/row access policies, roles, file formats, security integrations)
+- Each object type has a strategy class that recommends target service, generates deployment SQL, and estimates automation percentage
+- Integration with planner agent and documentation report
+- Used in pipeline step 7 (`platform_analysis`) before transpilation
 
 ---
 
@@ -396,9 +442,9 @@ Each step reports progress via a shared `progress` dict. The UI polls `/api/stat
 
 ### Key App Configuration (app.py)
 - `app.title`: "Snowflake to Databricks Migration Agent"
-- `app.version`: "2.0.0"
+- `app.version`: "2.1.0"
 - `_SECRET_FIELDS`: `{sf_password, db_token, s3_access_key, s3_secret_key, azure_sas_token, gcs_service_account}`
-- `PROGRESS_TOTAL`: 9 (steps in UI migration)
+- `PROGRESS_TOTAL`: 9 (phases in UI migration)
 - `_RUNS_TTL`: 6 hours (in-memory cache TTL)
 - `_RUNS_MAX`: 200 (max cached runs)
 
@@ -436,6 +482,7 @@ Stores project configurations with encrypted credentials.
 | db_token | TEXT | Encrypted PAT token |
 | db_catalog | TEXT | Databricks catalog |
 | db_schema | TEXT | Databricks schema |
+| target_cloud | TEXT | Target cloud provider (aws/azure/gcp) for stage credential generation |
 | created_at | REAL | Unix timestamp |
 | updated_at | REAL | Unix timestamp |
 
@@ -571,7 +618,7 @@ Each converted object has these review fields:
 ### `.env` File
 ```
 LLM_PROVIDER=gemini
-LLM_MODEL=gemini-2.0-flash
+LLM_MODEL=gemini-2.5-flash
 LLM_API_KEY=your_key_here
 ```
 
@@ -585,19 +632,19 @@ Alternative env vars: `GEMINI_API_KEY`, `LLM_CONFIG` (path to JSON config file),
 ### Startup
 ```bash
 cd Migration-Agent
-uvicorn app:app --reload --host 0.0.0.0 --port 8000
+uvicorn app:app --reload --host 0.0.0.0 --port 8001
 ```
-Or via `run.sh` which activates the virtual environment and starts the server.
+Or via `run.sh` which activates the virtual environment and starts the server on port 8001.
 
 ---
 
-## Testing (84 tests)
+## Testing (152 tests)
 
 ### `tests/test_agents.py` (72 tests)
-Tests for: orchestrator pipeline, project loader, SQL parser, schema agent, dependency analysis, rule engine, validation, confidence scoring, LLM transpiler, self-healing, storage discovery, deployment, data migration (internal/external), capability checker, planner, catalog mapping, performance optimizer, semi-structured agent, JS→Python conversion, manifest generation
+Tests for: orchestrator pipeline, project loader, SQL parser, schema agent, dependency analysis, rule engine, validation, confidence scoring, LLM transpiler, self-healing, storage discovery, deployment, data migration (internal/external), capability checker, planner, catalog mapping, performance optimizer, semi-structured agent, JS→Python conversion, manifest generation, data movers (internal/external/iceberg)
 
-### `tests/test_transpiler.py` (12 tests)
-Tests for: DDL conversion (all object types), UPDATE→MERGE transpiler, procedure body conversion, function conversion, EXECUTE AS → SQL SECURITY INVOKER, TEMPORARY TABLE → TEMPORARY VIEW, SQLGlot transpile, rule engine function mapping, DATEDIFF conversion, IFF→CASE, QUALIFY→subquery
+### `tests/test_transpiler.py` (80 tests)
+Tests for: DDL conversion (all object types), UPDATE→MERGE transpiler, procedure body conversion, function conversion, EXECUTE AS → SQL SECURITY INVOKER, TEMPORARY TABLE → TEMPORARY VIEW, SQLGlot transpile, rule engine function mapping, DATEDIFF conversion, IFF→CASE, QUALIFY→subquery, sequence conversion (OR REPLACE, START WITH, INCREMENT BY, NOORDER), nextval/currval, identity detection, constraint validation, architecture change classification
 
 Run with: `python -m pytest tests/ -v`
 
@@ -612,9 +659,13 @@ Run with: `python -m pytest tests/ -v`
 5. **Procedure post-processing safety net**: after LLM review, regex fixes known regressions (SQL SECURITY DEFINER, RETURN '', double-quoted names)
 6. **Deterministic UPDATE→MERGE transpiler**: Regex-based, handles nested parens in subqueries, alias extraction
 7. **Unconditional LLM review**: removed conditional filtering — reviews every object with converted_sql
-8. **9-step UI progress**: simplified from 21-step pipeline for real-time web tracking
+8. **9-step UI progress**: simplified from 23-step pipeline for real-time web tracking
 9. **Thread-local SQLite connections**: prevents threading issues in FastAPI async context
 10. **Job queue with queue.db**: serializes migrations to prevent concurrent Snowflake/Databricks conflicts
+11. **LakeBridge global monkey-patch**: LakeBridge import globally patches sqlglot dialect registry — `--` prefix stripping added to recover DDL structure from unsupported syntax
+12. **Target Cloud parameter**: `target_cloud` (aws/azure/gcp) passed through creds → orchestrator → `convert_schema()` for cloud-specific stage credential generation
+13. **Sequence skip in SQLGlot transpilation**: sequences added to `_PLATFORM_SKIP_TYPES` to prevent LakeBridge from stripping `START WITH`/`INCREMENT BY`; custom converter handles them instead
+14. **Mutually exclusive status categories**: `Auto Converted`, `Manual Review`, `Architectural`, `Issues`, `Failed` — each counted once in report summary; old-run backward compatibility via `_patch_summary`
 
 ---
 
@@ -625,6 +676,7 @@ Run with: `python -m pytest tests/ -v`
 - **Progress Page**: Real-time step tracking with polling, cancel button
 - **Results Page**: Tabular conversion list, SQL diff viewer, review/approve/reject per object, deploy controls, cloud storage credential tabs (AWS/Azure/GCS), data migration controls
 - **History Page**: Cross-project run history with filtering
+- **Templates restored to original state**: UI changes (dark mode, expand/collapse, download report) were reverted per user request; templates are at original commit state
 
 ### JavaScript Functions
 - Tab system for cloud providers (AWS/Azure/GCS)

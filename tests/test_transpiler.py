@@ -41,7 +41,7 @@ def _make_obj(raw_sql, obj_type="table", name="test_obj"):
 def run_pipeline(sql, obj_type="table"):
     """Run the full transpilation pipeline on a single SQL statement."""
     obj = _make_obj(sql, obj_type)
-    if obj_type not in ("procedure",) and "LANGUAGE JAVASCRIPT" not in (obj.raw_sql or "").upper():
+    if obj_type not in ("procedure", "sequence") and "LANGUAGE JAVASCRIPT" not in (obj.raw_sql or "").upper():
         cleaned = preprocess_raw(sql)
         result = transpile_snowflake(cleaned)
         if result:
@@ -54,7 +54,7 @@ def run_pipeline(sql, obj_type="table"):
 def do_validate(sql, obj_type="table"):
     """Run full pipeline + validation, return (converted_sql, validation_result)."""
     obj = _make_obj(sql, obj_type)
-    if obj_type not in ("procedure",) and "LANGUAGE JAVASCRIPT" not in (obj.raw_sql or "").upper():
+    if obj_type not in ("procedure", "sequence") and "LANGUAGE JAVASCRIPT" not in (obj.raw_sql or "").upper():
         cleaned = preprocess_raw(sql)
         result = transpile_snowflake(cleaned)
         if result:
@@ -368,8 +368,15 @@ def test_dml_functions():
 
     check("create_sequence",
         "CREATE SEQUENCE my_seq START WITH 100 INCREMENT BY 1",
-        [r"CREATE SEQUENCE", r"START WITH 100"],
-        None)
+        [r"CREATE SEQUENCE", r"START WITH 100", r"INCREMENT BY 1"],
+        None,
+        obj_type="sequence")
+
+    check("create_sequence_or_replace",
+        "CREATE OR REPLACE SEQUENCE SEQ_CUSTOMER_KEY START WITH 1 INCREMENT BY 1 NOORDER",
+        [r"DROP SEQUENCE IF EXISTS", r"CREATE SEQUENCE", r"START WITH 1", r"INCREMENT BY 1", r"NOORDER"],
+        None,
+        obj_type="sequence")
 
     check("nextval_colon",
         "SELECT my_seq.NEXTVAL AS id",

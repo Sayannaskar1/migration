@@ -53,7 +53,7 @@ from agents.platform.strategy_base import StrategyAnalysis, StrategyPlan
 from agents.platform.mapping_catalog import PLATFORM_OBJECT_TYPES
 
 
-_PLATFORM_SKIP_TYPES = PLATFORM_OBJECT_TYPES | {"external_table", "iceberg_table", "grant", "user"}
+_PLATFORM_SKIP_TYPES = PLATFORM_OBJECT_TYPES | {"external_table", "iceberg_table", "grant", "user", "sequence"}
 
 
 def preprocess_raw(sql: str) -> str:

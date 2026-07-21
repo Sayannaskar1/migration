@@ -81,6 +81,20 @@ class JSPythonUDFAgent:
             result.error = "Could not extract JavaScript body from DDL"
             return result
 
+        # Try rule-based translation first for simple constructs
+        rule_based = self._rule_based_translate(js_body)
+        if rule_based is not None:
+            result.success = True
+            result.strategy = "rule_based"
+            converted = self._generate_databricks_ddl(raw_sql, rule_based, obj.object_type, obj.name)
+            if converted:
+                result.converted_sql = converted
+                obj.converted_sql = converted
+            else:
+                result.error = "Failed to generate Databricks DDL"
+            return result
+
+        # Fall back to LLM for complex constructs
         python_body = self._call_llm(js_body, llm_config)
         if not python_body:
             result.error = "LLM conversion failed — no provider configured or call failed"
@@ -109,6 +123,134 @@ class JSPythonUDFAgent:
             body = body.replace("\\'", "'").replace("\\n", "\n")
             return body.strip()
         return None
+
+    # ── Rule-based JS → Python translator ──
+
+    # Constructs that require LLM (not translatable deterministically)
+    _COMPLEX_PATTERNS = [
+        r"\bsnowflake\b",          # Snowflake APIs
+        r"\beval\s*\(",            # eval()
+        r"\bnew\s+Date\b",         # Date objects
+        r"\.prototype\b",          # prototype chain
+        r"\barguments\b",          # arguments object
+        r"\bclosures?\b",          # closures
+        r"\bcatch\s*\(",           # try/catch
+        r"\bfinally\s*\{",         # try/finally
+        r"\basync\b",              # async/await
+        r"\bawait\b",              # async/await
+        r"\bclass\s+\w+",          # class declarations
+        r"\bimport\s+",            # ES6 imports
+        r"\bexport\s+",            # ES6 exports
+        r"\bfor\s*\(\s*var\s+\w+\s+of\b",  # for...of
+        r"\bfor\s*\(\s*var\s+\w+\s+in\b",  # for...in
+        r"\bArray\.isArray\b",     # Array.isArray
+        r"\bObject\.\w+",          # Object.keys/values/etc
+        r"\bJSON\.parse\b",        # JSON.parse (complex)
+        r"\bJSON\.stringify\b",    # JSON.stringify (complex)
+        r"\bMap\s*\(",             # Map constructor
+        r"\bSet\s*\(",             # Set constructor
+        r"\bPromise\b",            # Promises
+        r"\bthen\s*\(",            # Promise chains
+        r"\bcatch\s*\(",           # Promise chains
+    ]
+
+    def _is_simple_js(self, js_body: str) -> bool:
+        for pat in self._COMPLEX_PATTERNS:
+            if re.search(pat, js_body, re.IGNORECASE):
+                return False
+        return True
+
+    def _rule_based_translate(self, js_body: str) -> str | None:
+        """Attempt deterministic JS→Python translation. Returns None if too complex."""
+        if not self._is_simple_js(js_body):
+            return None
+
+        body = js_body.strip()
+
+        # Strip trailing semicolons
+        body = re.sub(r";\s*$", "", body, flags=re.MULTILINE)
+
+        # var/let/const → plain assignment
+        body = re.sub(r"\b(?:var|let|const)\s+", "", body)
+
+        # Null/undefined checks
+        body = re.sub(r"(!\s*(\w+))\s*(?=\)|\?|:|&&|\|\||$)", r"\2 is None", body)
+        body = re.sub(r"(\w+)\s*===?\s*null\b", r"\1 is None", body)
+        body = re.sub(r"(\w+)\s*!==?\s*null\b", r"\1 is not None", body)
+        body = re.sub(r"(\w+)\s*===?\s*undefined\b", r"\1 is None", body)
+        body = re.sub(r"(\w+)\s*!==?\s*undefined\b", r"\1 is not None", body)
+
+        # Equality operators
+        body = re.sub(r"===", "==", body)
+        body = re.sub(r"!==", "!=", body)
+
+        # Logical operators
+        body = re.sub(r"\&\&", "and", body)
+        body = re.sub(r"\|\|", "or", body)
+        body = re.sub(r"\!\s*(?=\w)", "not ", body)
+
+        # String methods
+        body = re.sub(r"\.toLowerCase\(\)", ".lower()", body)
+        body = re.sub(r"\.toUpperCase\(\)", ".upper()", body)
+        body = re.sub(r"\.trim\(\)", ".strip()", body)
+        body = re.sub(r"\.length\b", ".__len__()", body)
+        body = re.sub(r"\.substring\((\d+),\s*(\d+)\)", r"[\1:\2]", body)
+        body = re.sub(r"\.indexOf\(([^)]+)\)", r".find(\1)", body)
+        body = re.sub(r"\.charAt\((\d+)\)", r"[\1]", body)
+        body = re.sub(r"\.slice\(([^)]+)\)", r"[\1]", body)
+        body = re.sub(r"\.includes\(([^)]+)\)", r" in \1", body)
+        body = re.sub(r"\.replace\(([^,]+),\s*([^)]+)\)", r".replace(\1, \2)", body)
+        body = re.sub(r"\.split\(([^)]+)\)", r".split(\1)", body)
+        body = re.sub(r"\.join\(([^)]+)\)", r".join(\1)", body)
+        body = re.sub(r"\.push\(([^)]+)\)", r".append(\1)", body)
+
+        # Math methods
+        body = re.sub(r"Math\.abs\(", "abs(", body)
+        body = re.sub(r"Math\.ceil\(", "math.ceil(", body)
+        body = re.sub(r"Math\.floor\(", "math.floor(", body)
+        body = re.sub(r"Math\.round\(", "round(", body)
+        body = re.sub(r"Math\.max\(", "max(", body)
+        body = re.sub(r"Math\.min\(", "min(", body)
+        body = re.sub(r"Math\.pow\(", "pow(", body)
+        body = re.sub(r"Math\.sqrt\(", "math.sqrt(", body)
+
+        # parseInt/parseFloat
+        body = re.sub(r"\bparseInt\(([^)]+)\)", r"int(\1)", body)
+        body = re.sub(r"\bparseFloat\(([^)]+)\)", r"float(\1)", body)
+        body = re.sub(r"\bString\(([^)]+)\)", r"str(\1)", body)
+
+        # Ternary: x ? y : z → y if x else z
+        body = re.sub(
+            r"(\w+(?:\s+\w+)*)\s*\?\s*([^:]+?)\s*:\s*(.+)",
+            r"\2 if \1 else \3",
+            body,
+        )
+
+        # if/else if/else → if/elif/else
+        body = re.sub(r"\}?\s*else\s+if\s*\(", "\nelif ", body)
+        body = re.sub(r"\}?\s*else\s*\{", "\nelse:", body)
+        body = re.sub(r"\bif\s*\(", "if ", body)
+
+        # Strip remaining braces and parentheses from control flow
+        body = re.sub(r"\)\s*\{", ":", body)
+        body = re.sub(r"^\s*\}\s*$", "", body, flags=re.MULTILINE)
+
+        # return → return
+        body = re.sub(r"\breturn\s+", "return ", body)
+
+        # String concatenation: 'a' || 'b' → 'a' + 'b' (already handled by || → or above)
+        # But we need to handle string || concat differently
+        # Undo the || → or for string contexts if needed
+
+        # Clean up
+        body = re.sub(r"\n{3,}", "\n\n", body)
+        body = body.strip()
+
+        # Validate: ensure we have actual Python code
+        if not body or body == js_body.strip():
+            return None
+
+        return body
 
     def _call_llm(self, js_body: str, llm_config: dict | None) -> str | None:
         from agents.llm_transpiler import _get_llm_config, _call_openai, _call_anthropic, _call_gemini
