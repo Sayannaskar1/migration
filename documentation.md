@@ -632,25 +632,23 @@ Alternative env vars: `GEMINI_API_KEY`, `LLM_CONFIG` (path to JSON config file),
 ### Setup & Startup
 
 ```bash
-# 1. Clone the repo (creates migration/ directory)
 git clone https://github.com/Sayannaskar1/migration.git
 cd migration
-
-# 2. Create virtual environment and install dependencies
 python3 -m venv .venv
-source .venv/bin/activate       # macOS/Linux
-# .venv\Scripts\activate        # Windows
+source .venv/bin/activate
 pip install -r requirements.txt
-
-# 3. (Optional) Create .env for LLM features
-#     echo "LLM_PROVIDER=gemini" >> .env
-#     echo "LLM_API_KEY=your_key_here" >> .env
-
-# 4. Start the server
 uvicorn app:app --host 0.0.0.0 --port 8001 --reload
 ```
 
-Or use `run.sh` which auto-detects `.venv/bin/python3` (either project-local or parent-relative) and falls back to system `python3`.
+Or with `run.sh` (auto-detects python):
+```bash
+git clone https://github.com/Sayannaskar1/migration.git
+cd migration
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+bash run.sh
+```
 
 ---
 
