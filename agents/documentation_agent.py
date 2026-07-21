@@ -977,7 +977,7 @@ def _build_html(
     w('<div class="score-label">Overall Migration Score</div>')
     w('<div class="rec">')
     w('<h4>Recommendation</h4>')
-    ready_text = "Ready to proceed with deployment." if norm_score >= 80 and manual_review_count == 0 else "Manual review required before deployment."
+    ready_text = "Ready to proceed with deployment." if norm_score >= 80 and manual_review == 0 else "Manual review required before deployment."
     w(f'<p style="font-size:13px;color:var(--text-secondary);margin-bottom:8px">{_h(ready_text)}</p>')
     if rec_types:
         w("<ul>")
