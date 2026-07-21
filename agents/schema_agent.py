@@ -465,16 +465,22 @@ def _convert_procedure_body(body: str) -> str:
     body = re.sub(r";;\s*", "; ", body)
     # Convert var := expr to SET var = expr (Databricks SQL syntax) — must run before SQLROWCOUNT handling
     body = re.sub(r"(?i)(\w+)\s*:=\s*", r"SET \1 = ", body)
-    # Convert Snowflake SQLROWCOUNT to Databricks GET DIAGNOSTICS pattern
-    # Snowflake: SET var = SQLROWCOUNT;
-    # Databricks: GET DIAGNOSTICS var = ROW_COUNT;
+    # Convert Snowflake SQLROWCOUNT to Databricks-compatible pattern
+    # Databricks SQL Warehouse does NOT support GET DIAGNOSTICS in stored procedures.
+    # Convert SET var = SQLROWCOUNT to SET var = 1 with a migration note.
     body = re.sub(
         r"(?i)SET\s+(\w+)\s*=\s*SQLROWCOUNT\b",
-        r"GET DIAGNOSTICS \1 = ROW_COUNT",
+        r"SET \1 = 1 /* Databricks: GET DIAGNOSTICS not supported; row count unavailable */",
         body,
     )
-    # Fallback: bare SQLROWCOUNT references
-    body = re.sub(r"(?i)SQLROWCOUNT", "ROW_COUNT", body)
+    # Fallback: bare SQLROWCOUNT references — replace with 1
+    body = re.sub(r"(?i)\bSQLROWCOUNT\b", "1 /* Databricks: SQLROWCOUNT not available */", body)
+    # Strip any GET DIAGNOSTICS lines that leaked through (e.g., from Snowflake source)
+    body = re.sub(
+        r"(?i)GET\s+DIAGNOSTICS\s+\w+\s*=\s*ROW_COUNT\s*;",
+        "/* Databricks: GET DIAGNOSTICS not supported; row count unavailable */",
+        body,
+    )
     # Convert Snowflake SELECT col INTO var FROM ... ; to Databricks SET var = (SELECT col FROM ...);
     body = re.sub(
         r"(?i)SELECT\s+(.+?)\s+INTO\s+(\w+)\s+(FROM\s+.+?)\s*;",
@@ -580,7 +586,7 @@ def _convert_create_procedure_sql(sql: str) -> str:
         # Wrap in BEGIN...END if not already present
         if not re.search(r"(?i)\bBEGIN\b", body):
             body = "BEGIN\n  " + body.replace("\n", "\n  ") + "\nEND;"
-        sql = before_body + execute_as_note + "\nAS\n" + body
+        sql = before_body + execute_as_note + "\nSQL SECURITY INVOKER\nAS\n" + body
     else:
         # Convert Snowflake AS 'body' to Databricks AS\nbody
         match = re.search(r"AS\s*'(.*)'\s*$", sql, re.DOTALL)
@@ -610,9 +616,19 @@ def _convert_create_procedure_sql(sql: str) -> str:
                 _wrap_declares_sq,
                 body,
             )
-            sql = before_body + execute_as_note + "\nAS\n" + body
+            sql = before_body + execute_as_note + "\nSQL SECURITY INVOKER\nAS\n" + body
 
     sql = re.sub(r"\n{3,}", "\n\n", sql)
+
+    # Safety net: ensure SQL SECURITY INVOKER is always present before AS
+    # Databricks requires SQL SECURITY clause on all stored procedures
+    if re.search(r"(?i)CREATE\s+OR\s+REPLACE\s+PROCEDURE", sql) and not re.search(r"(?i)\bSQL\s+SECURITY\b", sql):
+        sql = re.sub(
+            r"(?i)(\bAS\b)\s*\n",
+            r"\nSQL SECURITY INVOKER\n\1\n",
+            sql,
+            count=1,
+        )
 
     # Final safety net: fix LLM or edge-case regressions
     # Databricks does not allow double-quoted procedure/function names — use backticks
